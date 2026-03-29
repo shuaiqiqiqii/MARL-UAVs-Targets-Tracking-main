@@ -1,0 +1,46 @@
+exp_name: C-METHOD
+result_dir: ../results/C-METHOD
+#新增了critic和actor网络超参数
+
+# 第一个cuda device的编号, -1代表cpu
+first_device: 0
+# cuda device的数量, 使用cpu时无效
+gpus: 1
+seed: 42
+environment:
+  n_uav: 10
+  m_targets: 10
+  x_max: 2000
+  y_max: 2000
+  na: 12  # 离散化动作空间维数
+
+uav:
+  dt: 1
+  v_max: 20
+  h_max: 6  # 表示 pi / 6
+  dc: 500
+  dp: 200
+  alpha: 0.6
+  beta: 0.2
+  gamma: 0.2
+
+target:
+  v_max: 5
+  h_max: 6  # 表示 pi / 6
+
+actor_critic:
+  buffer_size: 1000000
+  sample_size: 0  # 表示每次采样的大小为每个epoch的step数，原先0表示批次大小
+  actor_lr: 1e-4 #actor学习率
+  critic_lr: 5e-4 #critic学习率
+  hidden_dim: 128 #隐藏层
+  gamma: 0.95 #折扣因子
+
+
+
+ #buffer_size: 1000000  # 保持100万，足够存储经验
+  #sample_size: 64       # 固定批次大小，训练稳定
+  #actor_lr: 3e-4        # 适度调大，加速收敛
+  #critic_lr: 5e-4       # 保持不变，比Actor快
+  #hidden_dim: 64        # 减少隐藏层维度，避免过拟合
+  #gamma: 0.98           # 更关注长期奖励，提升追踪持续性

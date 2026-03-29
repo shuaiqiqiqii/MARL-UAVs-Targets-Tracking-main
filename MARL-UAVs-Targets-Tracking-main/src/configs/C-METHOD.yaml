@@ -1,0 +1,31 @@
+exp_name: MAAC
+result_dir: ../results/MAAC
+# 第一个cuda device的编号, -1代表cpu
+first_device: 0
+# cuda device的数量, 使用cpu时无效
+gpus: 1
+seed: 42
+cooperative: 0 #协作模式开关（0= 非协作，1= 协作；控制是否启用 PMI 网络通信）
+environment:
+  n_uav: 10 #无人机数量
+  m_targets: 10 #目标数量
+  x_max: 2000 #x边界
+  y_max: 2000 #y边界
+  na: 12  # 离散化动作空间维数
+
+uav:
+  dt: 1 #时间步长
+  v_max: 20 #最大速度
+  h_max: 6  # 表示 pi / 6，最大转向角度
+  dc: 500 #通信半径
+  dp: 200 #感知半径
+  alpha: 0.6 #追踪奖励系数
+  beta: 0.2 #越界惩罚系数
+  gamma: 0.2 #重复追踪惩罚系数
+
+target:
+  v_max: 5 #目标最大速度
+  h_max: 6  # 表示 pi / 6
+
+
+
