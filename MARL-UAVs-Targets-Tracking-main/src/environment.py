@@ -189,8 +189,7 @@ class Environment:
 
     def step(self, config, pmi, actions):
         """
-        状态转换函数
-        执行动作 -》更新位置 + 计算奖励 -》返回新状态
+        状态转换函数:执行动作 -》更新位置 + 计算奖励 -》返回新状态 TODO: 新增碰撞
         :param config:
         :param pmi: PMI network
         :param actions: {0,1,...,Na - 1}
@@ -212,8 +211,8 @@ class Environment:
             uav.observe_target(self.target_list) #观测目标
             uav.observe_uav(self.uav_list) #观测其他无人机
 
-            #新增
-            uav.observe_uav(self.obstacle_list)
+            #新增 观测障碍物
+            uav.observe_obstacle(self.obstacle_list)
 
 
         #计算奖励 包含追踪奖励 边界惩罚 重复追踪惩罚
@@ -259,7 +258,7 @@ class Environment:
             'obstacle_punishment': obstacle_punishment
         }
 
-        return next_states, reward, covered_targets
+        return next_states, reward, covered_targets,covered_obstacle
 
     def __get_all_uav_position(self) -> (List[float], List[float]):
         """
@@ -307,7 +306,7 @@ class Environment:
         return (self.position['all_uav_xs'], self.position['all_uav_ys'],
                 self.position['all_target_xs'], self.position['all_target_ys'])
 
-    #新增 后续可能会和上一函数合并
+    #TODO： 新增 后续可能会和上一函数合并
     def get_uav_obstacle_position(self) -> (List[float], List[float], List[float], List[float]):
         """
         获取全部障碍物位置
@@ -319,7 +318,7 @@ class Environment:
 #待完善
     def calculate_rewards(self, config, pmi) -> ([float], float, float, float):
         """
-        计算奖励 待完善
+        计算奖励 待完善 后续可能是主要完善点
         :param config:
         :param pmi:
         :return:

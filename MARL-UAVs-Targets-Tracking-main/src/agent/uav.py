@@ -50,6 +50,8 @@ class UAV:
         # self.communication = []
         self.target_observation = [] #感知到的目标信息
         self.uav_communication = []  #通信范围内的队友信息
+        #new
+        self.obstacle_observation = []
 
         # reward
         self.raw_reward = 0
@@ -107,8 +109,8 @@ class UAV:
 
         return self.x, self.y, self.h  # 返回agent的位置和朝向(heading/theta)
 
-    def observe_obstacle(self, obstacle_list: List['OBSTACLE'],relative = True) :
-        pass
+    # def observe_obstacle(self, obstacle_list: List['OBSTACLE'],relative = True) :
+    #     pass
 
 
     def observe_target(self, targets_list: List['TARGET'], relative=True):
@@ -133,6 +135,31 @@ class UAV:
                                                     target.y / self.dp,
                                                     cos(target.h) * target.v_max / self.v_max,
                                                     sin(target.h) * target.v_max / self.v_max))
+
+    def observe_obstacle(self, obstacle_list: List['OBSTACLE'], relative = True):
+        """
+        感知障碍物信息 新增函数 可能存在修改
+        :param obstacle_list:
+        :param relative:
+        :return:
+        """
+        self.obstacle_observation = []
+        for obstacle in obstacle_list:
+            dist = self.__distance(obstacle)
+            if dist <=self.do:
+                if relative:
+                    self.obstacle_observation.append(((obstacle.x - self.x) / self.dp,
+                                                      (obstacle.y - self.y) / self.dp,
+                                                      cos(obstacle.h) * obstacle.v_max / self.v_max - cos(self.h),
+                                                      sin(obstacle.h) * obstacle.v_max / self.v_max - sin(self.h)))
+                else:
+                    self.obstacle_observation.append((obstacle.x / self.dp,
+                                                      (obstacle.y - self.y) / self.dp,
+                                                      cos(obstacle.h) * obstacle.v_max / self.v_max - cos(self.h),
+                                                      sin(obstacle.h) * obstacle.v_max / self.v_max - sin(self.h)))
+
+
+
 
     def observe_uav(self, uav_list: List['UAV'], relative=True):  # communication
         """
@@ -160,19 +187,20 @@ class UAV:
                                                    uav.a / self.Na))
 
     def __get_all_local_state(self) -> (List[Tuple[float, float, float, float, float]],
-                                        List[Tuple[float, float, float, float]], Tuple[float, float, float]):
+                                        List[Tuple[float, float, float, float]], Tuple[float, float, float],
+                                        List[Tuple[float, float, float, float]]):
         """
-        将状态进行拆分，拆分为：队友通信 + 目标感知 + 自身状态
+        将状态进行拆分，拆分为：队友通信5 + 目标感知4 + 自身状态3 +可能存在 （障碍感知 4维度）
         :return: [(x, y, vx, by, na),...] for uav, [(x, y, vx, vy)] for targets, (x, y, na) for itself
         """
-        return self.uav_communication, self.target_observation, (self.x / self.dc, self.y / self.dc, self.a / self.Na)
+        return self.uav_communication, self.target_observation, (self.x / self.dc, self.y / self.dc, self.a / self.Na),self.obstacle_observation
 
     def __get_local_state_by_weighted_mean(self) -> 'np.ndarray':
         """
         将多目标的感知信息和队友的通信信息加权平均为12维的向量  权重  = 1/距离
         :return: return weighted state: ndarray: (12)
         """
-        communication, observation, sb = self.__get_all_local_state()
+        communication, observation, state ,obstacle = self.__get_all_local_state()
         #如果是队友通信信息，加权平均（5维），多了个动作维度
         if communication:
             d_communication = []  # store the distance from each uav to itself
@@ -199,9 +227,22 @@ class UAV:
             average_observation = np.mean(observation_weighted, axis=0)
         else:
             average_observation = -np.ones(4)  # empty observation  # TODO -1合法吗
+
+        if obstacle:
+            d_obstacle = []
+            for x, y, vx, vy, na in obstacle:
+                d_obstacle.append(min(self.distance(x, y, self.x, self.y), 1))
+            obstacle = np.array(obstacle)
+            obstacle_weighted = obstacle / np.array(d_obstacle)[:, np.newaxis]
+            average_obstacle = np.mean(obstacle_weighted, axis=0)
+        else:
+            average_obstacle = -np.ones(4)
+
+
+
         #将所有信息进行拼接（12维） 目标、队友、自身的感知信息 4+5+3
-        sb = np.array(sb)
-        result = np.hstack((average_communication, average_observation, sb))
+        state = np.array(state)
+        result = np.hstack((average_communication, average_observation, state, average_obstacle))
         return result
 
     def get_local_state(self) -> 'np.ndarray':
@@ -293,9 +334,7 @@ class UAV:
 
 
 
-    #标记
-    #可能存在修改 封装障碍物惩罚
-
+    #TODO可能存在修改 封装障碍物惩罚
     def calculate_raw_reward(self, uav_list: List['UAV'], target__list: List['TAEGET'],obstacle_list:List['OBSTACLE'], x_max, y_max):
         """
         封装三类奖励（追踪奖励+边界惩罚+重复追踪惩罚）

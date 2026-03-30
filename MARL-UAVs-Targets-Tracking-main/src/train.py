@@ -19,6 +19,10 @@ class ReturnValueOfTrain:
         self.duplicate_tracking_punishment_return_list = [] #重复追踪惩罚
         self.average_covered_targets_list = [] #平均覆盖目标数量列表
         self.max_covered_targets_list = [] #最大覆盖目标数量列表
+        #新增的碰撞惩罚列表 平均碰撞和最大碰撞列表
+        self.obstacle_punishment_return_list = []
+        self.average_covered_obstacles_list = []
+        self.max_covered_obstacles_list = []
 
     def item(self):
         """
@@ -31,13 +35,19 @@ class ReturnValueOfTrain:
             'boundary_punishment_return_list': self.boundary_punishment_return_list,
             'duplicate_tracking_punishment_return_list': self.duplicate_tracking_punishment_return_list,
             'average_covered_targets_list': self.average_covered_targets_list,
-            'max_covered_targets_list': self.max_covered_targets_list
+            'max_covered_targets_list': self.max_covered_targets_list,
+            'obstacle_punishment_return_list': self.obstacle_punishment_return_list,
+            'average_covered_obstacles_list': self.average_covered_obstacles_list,
+            'max_covered_obstacles_list': self.max_covered_obstacles_list
         }
         return value_dict
 
-    def save_epoch(self, reward, tt_return, bp_return, dtp_return, average_targets, max_targets):
+    def save_epoch(self, reward, tt_return, bp_return, dtp_return, op_return,average_targets,average_obstacle, max_targets,max_obstacle):
         """
         每轮训练后，保存当前轮次的所有指标
+        :param max_obstacle: 一个轮次的最大碰撞数量
+        :param average_obstacle: 平均碰撞数
+        :param op_return: 碰撞惩罚返回值
         :param reward:奖励
         :param tt_return:
         :param bp_return:
@@ -52,6 +62,12 @@ class ReturnValueOfTrain:
         self.duplicate_tracking_punishment_return_list.append(dtp_return)
         self.average_covered_targets_list.append(average_targets)
         self.max_covered_targets_list.append(max_targets)
+
+        self.obstacle_punishment_return_list.append(op_return)
+        self.average_covered_obstacles_list.append(average_obstacle)
+        self.max_covered_obstacles_list.append(max_obstacle)
+
+
 
 #基础经验回访池，存储训练过程中的经验(状态-》动作-》奖励-》下一状态)，随机采样
 class ReplayBuffer:
@@ -203,7 +219,11 @@ def operate_epoch(config, env, agent, pmi, num_steps, cwriter_state=None, cwrite
     episode_target_tracking_return = 0#追踪奖励
     episode_boundary_punishment_return = 0 #越界惩罚
     episode_duplicate_tracking_punishment_return = 0 #重复追踪惩罚
+    #new
+    episode_obstacle_punishment_return = 0 #碰撞惩罚
+
     covered_targets_list = [] #每步覆盖的目标数
+    covered_obstacles_list = [] #碰撞数
 
     for i in range(num_steps):
         config['step'] = i + 1 #记录当前步数
@@ -221,33 +241,44 @@ def operate_epoch(config, env, agent, pmi, num_steps, cwriter_state=None, cwrite
             action_list.append(action.item())
 
         # use action_list to update the environment
-        next_state_list, reward_list, covered_targets = env.step(config, pmi, action_list)  # action: List[int]
+        #TODO: 增加返回列表
+        next_state_list, reward_list, covered_targets,covered_obstacles = env.step(config, pmi, action_list)  # action: List[int]
         transition_dict['actions'].extend(action_list)
         transition_dict['next_states'].extend(next_state_list)
         transition_dict['rewards'].extend(reward_list['rewards'])
+
+
         #累加该轮的指标
         episode_return += sum(reward_list['rewards'])
         episode_target_tracking_return += sum(reward_list['target_tracking_reward'])
         episode_boundary_punishment_return += sum(reward_list['boundary_punishment'])
         episode_duplicate_tracking_punishment_return += sum(reward_list['duplicate_tracking_punishment'])
+        #new
+        episode_obstacle_punishment_return += sum(reward_list['obstacle_punishment'])
         covered_targets_list.append(covered_targets)
-    #计算该轮的平均指标
+        covered_obstacles_list.append(covered_obstacles)
+    #计算该轮的平均指标 TODO: 新增碰撞
     episode_return /= num_steps * env.n_uav
     episode_target_tracking_return /= num_steps * env.n_uav
     episode_boundary_punishment_return /= num_steps * env.n_uav
     episode_duplicate_tracking_punishment_return /= num_steps * env.n_uav
+    episode_obstacle_punishment_return /= num_steps * env.n_uav
+
     average_covered_targets = np.mean(covered_targets_list)
+    average_covered_obstacles = np.mean(covered_obstacles_list)
+
     max_covered_targets = np.max(covered_targets_list)
+    max_covered_obstacles = np.max(covered_obstacles_list)
 
     return (transition_dict, episode_return, episode_target_tracking_return,
-            episode_boundary_punishment_return, episode_duplicate_tracking_punishment_return,
-            average_covered_targets, max_covered_targets)
+            episode_boundary_punishment_return, episode_duplicate_tracking_punishment_return,episode_obstacle_punishment_return,
+            average_covered_targets, average_covered_obstacles,max_covered_targets, max_covered_obstacles)
 
 #训练主函数
 #轮次循环 -》 环境重置 -》单论训练 -》经验回放 -》网络更新 -》保存
 def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
     """
-
+    总体训练函数 TODO: 增加碰撞相关内容
     :param config: 配置
     :param pmi: pmi network
     :param frequency: 打印消息的频率
@@ -285,17 +316,22 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                 # episode start
                 # transition_dict, reward, tt_return, bp_return, \
                 #     dtp_return = operate_epoch(config, env, agent, pmi, num_steps, cwriter_state, cwriter_prob)
+                #new TODO: 调整整体返回值
                 transition_dict, reward, tt_return, bp_return, \
-                    dtp_return, average_targets, max_targets = operate_epoch(config, env, agent, pmi, num_steps)
+                    dtp_return,op_return, average_targets, average_obstacles,max_targets,max_obstacles = operate_epoch(config, env, agent, pmi, num_steps)
                 writer.add_scalar('reward', reward, i)
                 writer.add_scalar('target_tracking_return', tt_return, i)
                 writer.add_scalar('boundary_punishment', bp_return, i)
                 writer.add_scalar('duplicate_tracking_punishment', dtp_return, i)
                 writer.add_scalar('average_covered_targets', average_targets, i)
                 writer.add_scalar('max_covered_targets', max_targets, i)
+                #new
+                writer.add_scalar('obstacle_punishment', op_return, i)
+                writer.add_scalar('average_covered_obstacles', average_obstacles, i)
+                writer.add_scalar('max_covered_obstacles', max_obstacles, i)
 
                 # saving return lists
-                return_value.save_epoch(reward, tt_return, bp_return, dtp_return, average_targets, max_targets)
+                return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,average_targets, average_obstacles,max_targets,max_obstacles)
 
                 # sample from buffer，经验回访，添加经验 -》采集 -》更新网络
                 buffer.add(transition_dict)
@@ -337,6 +373,7 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                         pmi.save(save_dir=config["save_dir"], epoch_i=i + 1)
                     env.save_position(save_dir=config["save_dir"], epoch_i=i + 1)
                     env.save_covered_num(save_dir=config["save_dir"], epoch_i=i + 1)
+                    env.save_obstacles(save_dir=config["save_dir"], epoch_i=i + 1)
 
                 # episode end
                 pbar.update(1)
@@ -363,22 +400,24 @@ def evaluate(config, env, agent, pmi, num_steps):
     env.reset(config=config)
 
     # episode start
-    transition_dict, reward, tt_return, bp_return, dtp_return, average_targets, max_targets = operate_epoch(config, env, agent, pmi, num_steps)
+    transition_dict, reward, tt_return, bp_return, dtp_return,op_return,average_targets,average_obstacles, max_targets,max_obstacles = operate_epoch(config, env, agent, pmi, num_steps)
 
     # saving return lists
-    return_value.save_epoch(reward, tt_return, bp_return, dtp_return, average_targets, max_targets)
+    return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,average_targets,average_obstacles, max_targets,max_obstacles)
 
     # save results and weights
     draw_animation(config=config, env=env, num_steps=num_steps, ep_num=0)
     env.save_position(save_dir=config["save_dir"], epoch_i=0)
     env.save_covered_num(save_dir=config["save_dir"], epoch_i=0)
+    #new
+    env.save_obstacle_num(save_dir=config["save_dir"], epoch_i=0)
 
     return return_value.item()
 
 def run_epoch(config, pmi, env, num_steps):
 
     """
-    一个轮次步骤
+    一个轮次步骤 TODO 增加碰撞信息
     :param config:
     :param env:
     :param num_steps:
@@ -389,6 +428,9 @@ def run_epoch(config, pmi, env, num_steps):
     episode_target_tracking_return = 0
     episode_boundary_punishment_return = 0
     episode_duplicate_tracking_punishment_return = 0
+    #新增碰撞惩罚返回值和碰撞列表
+    episode_obstacle_punishment_return = 0
+    covered_obstacle_list = []
     covered_targets_list = []
 
     for _ in range(num_steps):
@@ -400,35 +442,45 @@ def run_epoch(config, pmi, env, num_steps):
         #     action, target_index = uav.get_action_by_direction(env.target_list, env.uav_list, uav_tracking_status)  # TODO
         #     uav_tracking_status[target_index] = 1
         #     action_list.append(action)
+        #TODO: 先到这里
         for uav in env.uav_list:
             action = uav.get_action_by_direction(env.target_list, env.uav_list)  # TODO
             action_list.append(action)
 
-        next_state_list, reward_list, covered_targets = env.step(config, pmi, action_list)  # TODO
+        next_state_list, reward_list, covered_targets ,covered_obstacles= env.step(config, pmi, action_list)  # TODO
 
         # use action_list to update the environment
         transition_dict['actions'].extend(action_list)
         transition_dict['rewards'].extend(reward_list['rewards'])
-
         episode_return += sum(reward_list['rewards'])
         episode_target_tracking_return += sum(reward_list['target_tracking_reward'])
         episode_boundary_punishment_return += sum(reward_list['boundary_punishment'])
         episode_duplicate_tracking_punishment_return += sum(reward_list['duplicate_tracking_punishment'])
         covered_targets_list.append(covered_targets)
 
+        #new TODO: 新增碰撞更新队列
+        episode_obstacle_punishment_return += sum(reward_list['obstacle_punishment'])
+        covered_obstacle_list.append(covered_obstacles)
+
     average_covered_targets = np.mean(covered_targets_list)
     max_covered_targets = np.max(covered_targets_list)
+    #new 新增
+    average_covered_obstacles = np.mean(covered_obstacle_list)
+    max_covered_obstacles = np.max(covered_obstacle_list)
+
 
     return (transition_dict, episode_return, episode_target_tracking_return,
-            episode_boundary_punishment_return, episode_duplicate_tracking_punishment_return,
-            average_covered_targets, max_covered_targets)
+            episode_boundary_punishment_return, episode_duplicate_tracking_punishment_return,episode_obstacle_punishment_return,
+            average_covered_targets,average_covered_obstacles, max_covered_targets,max_covered_obstacles)
 
 def run(config, env, pmi, num_steps):
     """
+    执行文件
+    TODO 返回多加一个碰撞列表
     :param config:
     :param num_steps: 每局进行的步数
     :param env:
-    :return:
+    :return: return_list
     """
     # initialize saving list
     return_value = ReturnValueOfTrain()
@@ -436,15 +488,17 @@ def run(config, env, pmi, num_steps):
     # reset environment from config yaml file
     env.reset(config=config)
 
-    # episode start
-    transition_dict, reward, tt_return, bp_return, dtp_return, average_targets, max_targets = run_epoch(config, pmi, env, num_steps)
+    # episode start TODO:
+    transition_dict, reward, tt_return, bp_return, dtp_return, op_return,average_targets, average_obstacles,max_targets,max_obstacles = run_epoch(config, pmi, env, num_steps)
 
     # saving return lists
-    return_value.save_epoch(reward, tt_return, bp_return, dtp_return, average_targets, max_targets)
+    return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,average_targets, average_obstacles,max_targets,max_obstacles)
 
     # save results and weights
     draw_animation(config=config, env=env, num_steps=num_steps, ep_num=0)
     env.save_position(save_dir=config["save_dir"], epoch_i=0)
     env.save_covered_num(save_dir=config["save_dir"], epoch_i=0)
+    #new
+    env.save_obstacle_num(save_dir=config["save_dir"], epoch_i=0)
 
     return return_value.item()

@@ -11,6 +11,7 @@ cooperative: 0.3
 environment:
   n_uav: 3
   m_targets: 3
+  n_obstacles: 1
   x_max: 2000
   y_max: 2000
   na: 12  # 离散化动作空间维数
@@ -24,10 +25,15 @@ uav:
   alpha: 0.6
   beta: 0.2
   gamma: 0.2
+  omega: 0.2 #新增碰撞惩罚系数
 
 target:
   v_max: 5
   h_max: 6  # 表示 pi / 6
+
+obstacle:
+  v_max: 5
+  h_max: 6
 
 actor_critic:
   buffer_size: 1000000

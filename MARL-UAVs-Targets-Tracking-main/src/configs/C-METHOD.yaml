@@ -9,6 +9,7 @@ cooperative: 0 #协作模式开关（0= 非协作，1= 协作；控制是否启�
 environment:
   n_uav: 10 #无人机数量
   m_targets: 10 #目标数量
+  n_obstacles: 5 #动态障碍数量
   x_max: 2000 #x边界
   y_max: 2000 #y边界
   na: 12  # 离散化动作空间维数
@@ -22,10 +23,14 @@ uav:
   alpha: 0.6 #追踪奖励系数
   beta: 0.2 #越界惩罚系数
   gamma: 0.2 #重复追踪惩罚系数
+  omega: 0.2 #新增碰撞惩罚系数
 
 target:
   v_max: 5 #目标最大速度
   h_max: 6  # 表示 pi / 6
 
+obstacle:
+  v_max: 5
+  h_max: 6
 
 

@@ -55,11 +55,16 @@ def main(args):
     print_args(args)
 
     # 初始化environment, agent
+    # 已修改 TODO ：Environment可能需要修改
     env = Environment(n_uav=config["environment"]["n_uav"], #无人机数量
                       m_targets=config["environment"]["m_targets"], #目标数量
                       x_max=config["environment"]["x_max"], #环境x轴的最大范围
                       y_max=config["environment"]["y_max"], #y轴最大范围
-                      na=config["environment"]["na"]) #动作维度-无人机的动作数，本文将动作设置为离散变量
+                      na=config["environment"]["na"],
+                      n_obstacles=config["environment"]["n_obstacle"] #碰撞物数量
+                      ) #动作维度-无人机的动作数，本文将动作设置为离散变量
+
+
     #初始化智能体，Actor-Critic，Actor负责输出无人机的动作，Critic负责评估动作的好坏
     if args.method == "C-METHOD": #如果实验采用对比方法，不初始化Actor-Critic
         agent = None
@@ -121,6 +126,11 @@ def main(args):
                       "average_covered_targets_list")
     plot_reward_curve(config, return_list["max_covered_targets_list"],#最大覆盖目标数量曲线
                       "max_covered_targets_list")
+
+    #新增碰撞统计曲线
+    plot_reward_curve(config, return_list["obstacle_punishment_return_list"], "obstacle_punishment_return_list")
+    plot_reward_curve(config,return_list["average_covered_obstacles_list"],"average_covered_obstacles_list")
+    plot_reward_curve(config, return_list["max_covered_obstacles_list"],"max_covered_obstacles_list")
 
 
 if __name__ == "__main__":

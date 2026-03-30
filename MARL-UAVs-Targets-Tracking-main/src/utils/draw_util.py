@@ -5,6 +5,8 @@ import matplotlib.colors as mcolors
 import imageio
 from PIL import Image
 import numpy as np
+from matplotlib.lines import lineStyles
+
 #绘制各种曲线和可视化操作
 
 # 初始化文本对象为None
@@ -105,7 +107,22 @@ def get_gradient_color(start_color, end_color, num_points, idx):
     gradient_rgba = start_rgba + (end_rgba - start_rgba) * ratio
     return mcolors.to_hex(gradient_rgba)
 
-def update(ax, env, uav_plots, target_plots, uav_search_patches, frame, frames, num_steps, interval=2, paint_all=True):
+def update(ax, env, uav_plots, target_plots,obstacle_plots, uav_search_patches, frame, frames, num_steps, interval=2, paint_all=True):
+    """
+    每一帧的更新函数
+    :param ax:
+    :param env:
+    :param uav_plots:
+    :param target_plots:
+    :param uav_search_patches:
+    :param frame:
+    :param frames:
+    :param num_steps:
+    :param interval:
+    :param paint_all:
+    :return:
+    """
+
     global text_obj
 
     if frame == 0:
@@ -117,6 +134,7 @@ def update(ax, env, uav_plots, target_plots, uav_search_patches, frame, frames, 
         uav_y = [sublist[i] for sublist in uav_y]
         if uav_x and uav_y:  # Ensure the lists are not empty
             colors = [get_gradient_color('#E1FFFF', '#0000FF', frame, idx) for idx in range(len(uav_x))]
+            #无人机的颜色表示为蓝色渐变
             uav_plots[i].set_offsets(np.column_stack([uav_x, uav_y]))
             uav_plots[i].set_color(colors)
             uav_search_patches[i].center = (uav_x[-1], uav_y[-1])
@@ -130,14 +148,34 @@ def update(ax, env, uav_plots, target_plots, uav_search_patches, frame, frames, 
         target_y = [sublist[i] for sublist in target_y]
         if target_x and target_y:  # Ensure the lists are not empty
             colors = [get_gradient_color('#FFC0CB', '#DC143C', frame, idx) for idx in range(len(target_x))]
+            #追踪目标的颜色为红色渐变
             target_plots[i].set_offsets(np.column_stack([target_x, target_y]))
             target_plots[i].set_color(colors)
         else:
             print(f"Warning: Target {i} position list is empty at frame {frame}.")
 
+    #新增碰撞物的可视化操作
+    #TODO 待完善
+    for i in range(env.n_obstacles):
+        obstacle_x = env.position['all_obstacle_xs'][0: frame: interval]
+        obstacle_y = env.position['all_obstacle_ys'][0: frame: interval]
+        obstacle_x = [sublist[i] for sublist in obstacle_x]
+        obstacle_y = [sublist[i] for sublist in obstacle_y]
+        if obstacle_x and obstacle_y:
+            colors = [get_gradient_color('#E0E0E0','#333333',frame,idx) for idx in range(len(obstacle_x))]
+            #障碍物表示为灰色渐变色
+            obstacle_plots[i].set_offsets(np.column_stack([obstacle_x, obstacle_y]))
+            obstacle_plots[i].set_color(colors)
+        else:
+            print(f"Warning: obstacle {i} position list is empty at frame {frame}.")
+
+
     text_str = (
         f"detected target num = {env.covered_target_num[frame]}\n"
         f"detected target rate = {env.covered_target_num[frame] / env.m_targets * 100:.2f}%"
+        #new
+        f"detected obstacle num = {env.covered_obstacle_num[frame]}\n"
+        f"detected obstacle rate = {env.covered_obstacle_num[frame] / env.m_obstacles * 100:.2f}%"
     )
 
     # 清除之前的文本对象（如果存在）
@@ -165,10 +203,15 @@ def draw_animation(config, env, num_steps, ep_num, frames=100):
     #绘制轨迹、感知圈、文本
     uav_plots = [ax.scatter([], [], marker='o', color='b', linestyle='None', s=2,alpha=1) for _ in range(env.n_uav)]
     target_plots = [ax.scatter([], [], marker='o', color='r', linestyle='None', s=3,alpha=1) for _ in range(env.m_targets)]
+    #new
+    obstacle_plots = [ax.scatter([],[],marker='o',color='grey',lineStyle = 'None',s=4,alpha=1) for _ in range(env.m_obstacles)]
     uav_search_patches = [patches.Circle((0, 0), uav.dp, color='lightblue', alpha=0.2) for uav in env.uav_list]
+    uav_search_obstacle = [patches.Circle((0,0), uav.do,color = 'lightgrey',alpha=0.2 ) for uav in env.uav_list]
 
 
     for patch in uav_search_patches:
+        ax.add_patch(patch)
+    for patch in uav_search_obstacle:
         ax.add_patch(patch)
 
     # save_dir = os.path.join(config["save_dir"], "frames")
@@ -180,7 +223,7 @@ def draw_animation(config, env, num_steps, ep_num, frames=100):
     step_interval = 5
 
     for frame in range(0, num_steps, step_interval):
-        update(ax, env, uav_plots, target_plots, uav_search_patches, frame, frames, num_steps)
+        update(ax, env, uav_plots, target_plots,obstacle_plots, uav_search_patches, frame, frames, num_steps)
         # 核心修复：强制渲染画布（没有这步就是空白！）
         fig.canvas.draw()  # 触发渲染
         fig.canvas.flush_events()  # 刷新事件

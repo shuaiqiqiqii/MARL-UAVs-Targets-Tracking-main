@@ -43,7 +43,10 @@ def get_config(config_file):
     mkdir(os.path.join(save_dir, "animated")) #动画
     mkdir(os.path.join(save_dir, "t_xy")) #目标位置
     mkdir(os.path.join(save_dir, "u_xy")) #无人机位置
+    mkdir(os.path.join(save_dir, "o_xy")) #障碍物位置
     mkdir(os.path.join(save_dir, "covered_target_num")) #覆盖目标数
+    mkdir(os.path.join(save_dir, "covered_obstacle_num")) #碰撞数
+
 
     # create cuda devices
     set_device(config)

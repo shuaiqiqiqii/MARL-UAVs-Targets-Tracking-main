@@ -42,6 +42,13 @@ def save_csv(config, return_list):
         for reward in return_list['duplicate_tracking_punishment_return_list']:
             writer.writerow([reward])
 
+    with open(os.path.join(config["save_dir"], 'duplicate_obstacle_return_list.csv'), mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['duplicate_obstacle'])
+        for reward in return_list['duplicate_obstacle_return_list']:
+            writer.writerow([reward])
+
+
 
 def clip_and_normalize(val, floor, ceil, choice=1):
     """
