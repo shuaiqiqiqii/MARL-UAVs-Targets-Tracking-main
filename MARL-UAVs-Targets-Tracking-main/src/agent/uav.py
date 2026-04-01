@@ -148,13 +148,13 @@ class UAV:
             dist = self.__distance(obstacle)
             if dist <=self.do:
                 if relative:
-                    self.obstacle_observation.append(((obstacle.x - self.x) / self.dp,
-                                                      (obstacle.y - self.y) / self.dp,
+                    self.obstacle_observation.append(((obstacle.x - self.x) / self.do,
+                                                      (obstacle.y - self.y) / self.do,
                                                       cos(obstacle.h) * obstacle.v_max / self.v_max - cos(self.h),
                                                       sin(obstacle.h) * obstacle.v_max / self.v_max - sin(self.h)))
                 else:
-                    self.obstacle_observation.append((obstacle.x / self.dp,
-                                                      (obstacle.y - self.y) / self.dp,
+                    self.obstacle_observation.append((obstacle.x / self.do,
+                                                      (obstacle.y - self.y) / self.do,
                                                       cos(obstacle.h) * obstacle.v_max / self.v_max - cos(self.h),
                                                       sin(obstacle.h) * obstacle.v_max / self.v_max - sin(self.h)))
 
@@ -230,7 +230,7 @@ class UAV:
 
         if obstacle:
             d_obstacle = []
-            for x, y, vx, vy, na in obstacle:
+            for x, y, vx, vy in obstacle:
                 d_obstacle.append(min(self.distance(x, y, self.x, self.y), 1))
             obstacle = np.array(obstacle)
             obstacle_weighted = obstacle / np.array(d_obstacle)[:, np.newaxis]
@@ -253,16 +253,16 @@ class UAV:
         # using weighted mean method:
         return self.__get_local_state_by_weighted_mean()
 
-    def __calculate_multi_target_tracking_reward(self, uav_list) -> float:
+    def __calculate_multi_target_tracking_reward(self, target_list) -> float:
         """
         追踪奖励计算，距离目标越近奖励越高
         calculate multi target tracking reward
         :return: scalar [1, 2)
         """
         track_reward = 0
-        for other_uav in uav_list:
-            if other_uav != self:
-                distance = self.__distance(other_uav)
+        for target  in target_list:
+            if target != self:
+                distance = self.__distance(target)
                 if distance <= self.dp:
                     reward = 1 + (self.dp - distance) / self.dp
                     # track_reward += clip_and_normalize(reward, 1, 2, 0)
@@ -313,29 +313,39 @@ class UAV:
     #计算障碍物惩罚
     #后续需要新添加一个属性  用于计算碰撞区域
     #可能是主要修改区域
+
+    # def __calculate_obstacle_punishment(self, obstacle_list: List['OBSTACLE']) -> float:
+    #     """
+    #     计算靠近障碍物的惩罚（负值），距离越近惩罚越重。
+    #     设计原则：
+    #       - 惩罚范围：[0, -1]（0 表示无惩罚，-1 表示完全重叠）
+    #       - 仅当 distance < self.do 时施加惩罚
+    #       - 多个障碍物时取最大惩罚（最危险的一个），避免累加导致过度惩罚
+    #     :param obstacle_list: 障碍物对象列表，每个对象需有 x, y 属性
+    #     :return: 惩罚值，范围 [-1, 0]
+    #     """
+    #     max_punishment = 0.0
+    #     for obs in obstacle_list:
+    #         distance = self.__distance(obs)
+    #         if distance < self.do:
+    #             normalized = (self.do - distance) / self.do  # [0, 1]
+    #             punish = - (normalized ** 2)
+    #             if punish < max_punishment:
+    #                 max_punishment = punish
+    #     return max_punishment
+    #
     def __calculate_obstacle_punishment(self, obstacle_list: List['OBSTACLE']) -> float:
-        """
-        计算靠近障碍物的惩罚[0~-1] 待完善
-        :param x_max:
-        :param y_max:
-        :return:
-        """
-        obstacle_punish = 0
-        for other_uav in obstacle_list:
-            if other_uav != self:
-                distance = self.__distance(other_uav)
-                if distance <= self.do:
-                    punish =  (self.do - distance) / self.do-1
-                    # track_reward += clip_and_normalize(reward, 1, 2, 0)
-                    obstacle_punish += punish  # 没有clip, 在调用时外部clip
-        return obstacle_punish
-
-
-
-
+        max_punishment = 0.0
+        for obs in obstacle_list:
+            distance = self.__distance(obs)
+            if distance < self.do:
+                punish = -0.5 * (self.do - distance) / self.do  # 线性，范围 [ -0.5, 0 ]
+                if punish < max_punishment:
+                    max_punishment = punish
+        return max_punishment
 
     #TODO可能存在修改 封装障碍物惩罚
-    def calculate_raw_reward(self, uav_list: List['UAV'], target__list: List['TAEGET'],obstacle_list:List['OBSTACLE'], x_max, y_max):
+    def calculate_raw_reward(self, uav_list: List['UAV'], target__list: List['TARGET'],obstacle_list:List['OBSTACLE'], x_max, y_max):
         """
         封装三类奖励（追踪奖励+边界惩罚+重复追踪惩罚）
         calculate three parts of the reward/punishment for this uav
@@ -466,3 +476,19 @@ class UAV:
             
         actual_action = self.find_closest_a_idx(best_angle)
         return actual_action
+
+    def find_closest_a_idx(self, angle):
+        """
+        通过输入的角度找到最接近的离散动作
+        :param angle:
+        :return:
+        """
+        best_idx = 0
+        min_diff = float('inf')
+        for idx in range(self.Na):
+            act = self.discrete_action(idx)
+            diff = abs(act - angle)
+            if diff < min_diff:
+                min_diff = diff
+                best_idx = idx
+        return best_idx

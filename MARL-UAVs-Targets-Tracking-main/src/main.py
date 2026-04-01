@@ -61,7 +61,7 @@ def main(args):
                       x_max=config["environment"]["x_max"], #环境x轴的最大范围
                       y_max=config["environment"]["y_max"], #y轴最大范围
                       na=config["environment"]["na"],
-                      n_obstacles=config["environment"]["n_obstacle"] #碰撞物数量
+                      n_obstacles=config["environment"]["n_obstacles"] #碰撞物数量
                       ) #动作维度-无人机的动作数，本文将动作设置为离散变量
 
 
@@ -69,7 +69,7 @@ def main(args):
     if args.method == "C-METHOD": #如果实验采用对比方法，不初始化Actor-Critic
         agent = None
     else:
-        agent = ActorCritic(state_dim=12, #状态维度（无人机位置+速度+目标位置等）
+        agent = ActorCritic(state_dim=16, #状态维度（无人机位置+速度+目标位置等）
                             hidden_dim=config["actor_critic"]["hidden_dim"], #隐藏层维度
                             action_dim=config["environment"]["na"], #动作维度
                             actor_lr=float(config["actor_critic"]["actor_lr"]), #Actor学习率
@@ -139,7 +139,7 @@ if __name__ == "__main__":
 
     # 添加超参数
     parser.add_argument("--phase", type=str, default="train", choices=["train", "evaluate", "run"])
-    parser.add_argument("-e", "--num_episodes", type=int, default=10000, help="训练轮数")
+    parser.add_argument("-e", "--num_episodes", type=int, default=100, help="训练轮数")
     parser.add_argument("-s", "--num_steps", type=int, default=200, help="每轮进行步数")
     parser.add_argument("-f", "--frequency", type=int, default=100, help="打印信息及保存的频率")
     parser.add_argument("-a", "--actor_path", type=str, default=None, help="actor网络权重的路径")

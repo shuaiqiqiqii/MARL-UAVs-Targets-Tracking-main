@@ -175,7 +175,7 @@ def update(ax, env, uav_plots, target_plots,obstacle_plots, uav_search_patches, 
         f"detected target rate = {env.covered_target_num[frame] / env.m_targets * 100:.2f}%"
         #new
         f"detected obstacle num = {env.covered_obstacle_num[frame]}\n"
-        f"detected obstacle rate = {env.covered_obstacle_num[frame] / env.m_obstacles * 100:.2f}%"
+        f"detected obstacle rate = {env.covered_obstacle_num[frame] / env.n_obstacles * 100:.2f}%"
     )
 
     # 清除之前的文本对象（如果存在）
@@ -204,7 +204,7 @@ def draw_animation(config, env, num_steps, ep_num, frames=100):
     uav_plots = [ax.scatter([], [], marker='o', color='b', linestyle='None', s=2,alpha=1) for _ in range(env.n_uav)]
     target_plots = [ax.scatter([], [], marker='o', color='r', linestyle='None', s=3,alpha=1) for _ in range(env.m_targets)]
     #new
-    obstacle_plots = [ax.scatter([],[],marker='o',color='grey',lineStyle = 'None',s=4,alpha=1) for _ in range(env.m_obstacles)]
+    obstacle_plots = [ax.scatter([],[],marker='o',color='grey',linestyle = 'None',s=4,alpha=1) for _ in range(env.n_obstacles)]
     uav_search_patches = [patches.Circle((0, 0), uav.dp, color='lightblue', alpha=0.2) for uav in env.uav_list]
     uav_search_obstacle = [patches.Circle((0,0), uav.do,color = 'lightgrey',alpha=0.2 ) for uav in env.uav_list]
 

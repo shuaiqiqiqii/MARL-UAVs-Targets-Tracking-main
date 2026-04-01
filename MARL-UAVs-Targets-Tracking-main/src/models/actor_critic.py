@@ -66,7 +66,7 @@ class ResPolicyNet(nn.Module):
         x = self.residual_block1(x)
         x = self.residual_block2(x)
         # 平均池化（降维，固定输出维度）
-        x = f.avg_pool1d(x, 12)  # 这里使用平均池化[batch, hidden_dim, 12] → [batch, hidden_dim, 1]
+        x = f.avg_pool1d(x, x.size(2))  # 这里使用平均池化[batch, hidden_dim, 12] → [batch, hidden_dim, 1]
         x = x.view(x.size(0), -1) # 展平 → [batch, hidden_dim]
         # 全连接层+softmax（输出动作概率）
         x = self.fc(x)

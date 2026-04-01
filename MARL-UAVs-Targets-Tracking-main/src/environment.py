@@ -13,8 +13,7 @@ from typing import List
 from  src.agent.obstacle import OBSTACLE
 
 class Environment:
-    def __init__(self, n_uav: int, m_targets: int, x_max: float, y_max: float, na: int, n_obstacles: int = 0, obstacle_v_max: float = 0, obstacle_h_max: float = 6,
-                 collision_radius: float = 50):
+    def __init__(self, n_uav: int, m_targets: int, x_max: float, y_max: float, na: int, n_obstacles: int = 0):
         """
         :param n_uav: scalar 无人机数量
         :param m_targets: scalar 目标数量
@@ -24,9 +23,6 @@ class Environment:
 
         新增
         :param n_obstacles: 障碍物数量
-        :param obstacle_v_max: 障碍物最大速度
-        :param obstacle_h_max: 障碍物最大角速度
-        :param collision_radius: 碰撞半径
 
         """
         # size of the environment
@@ -37,7 +33,7 @@ class Environment:
         # communication(4 scalar, a), observation(4 scalar), boundary and state information(2 scalar, a)
         # self.state_dim = (4 + na) + 4 + (2 + na)
         #状态维度 =  通信 + 观测  +边界、状态
-        self.state_dim = (4 + 1) + 4 + (2 + 1)
+        self.state_dim = (4 + 1) + 4 + (2 + 1) + 4
         #动作维度
         self.action_dim = na
 
@@ -45,10 +41,6 @@ class Environment:
         self.n_uav = n_uav
         self.m_targets = m_targets
         self.n_obstacles = n_obstacles
-        self.obstacle_v_max = obstacle_v_max
-        self.obstacle_h_max = obstacle_h_max
-        self.collision_radius = collision_radius
-
         # agents
         self.uav_list = []
         self.target_list = []
@@ -64,7 +56,7 @@ class Environment:
         #新增被碰撞的数量
         self.covered_obstacle_num = []
 
-    def __reset(self, t_v_max, t_h_max,u_v_max, u_h_max,o_v_max,o_h_max , na, dc, dp, dt, init_x, init_y,do):
+    def __reset(self, t_v_max, t_h_max,u_v_max, u_h_max,o_v_max,o_h_max , na, dc, dp, dt,do,init_x, init_y):
         """
         作用是为了在每次的训练和评估之前 重置无人机数量和目标的初始状态，保证每轮的环境都是独立的
         :param t_v_max:  目标最大速度
@@ -91,28 +83,28 @@ class Environment:
                                  init_y[i],
                                  random.uniform(-pi, pi), #随机的转向角度
                                  random.randint(0, self.action_dim - 1), # 初始为随机的动作
-                                 u_v_max, u_h_max, na, dc, dp, dt) for i in range(self.n_uav)]
+                                 u_v_max, u_h_max, na, dc, dp, dt,do) for i in range(self.n_uav)]
         elif not isinstance(init_x, List) and not isinstance(init_y, List):
             #所有无人机的初始坐标相同
             self.uav_list = [UAV(init_x,
                                  init_y,
                                  random.uniform(-pi, pi),
                                  random.randint(0, self.action_dim - 1),
-                                 u_v_max, u_h_max, na, dc, dp, dt) for _ in range(self.n_uav)]
+                                 u_v_max, u_h_max, na, dc, dp, dt,do) for _ in range(self.n_uav)]
         elif isinstance(init_x, List):
             #x坐标统一
             self.uav_list = [UAV(init_x[i],
                                  init_y,
                                  random.uniform(-pi, pi),
                                  random.randint(0, self.action_dim - 1),
-                                 u_v_max, u_h_max, na, dc, dp, dt) for i in range(self.n_uav)]
+                                 u_v_max, u_h_max, na, dc, dp, dt,do) for i in range(self.n_uav)]
         elif isinstance(init_y, List):
             #y坐标统一
             self.uav_list = [UAV(init_x,
                                  init_y[i],
                                  random.uniform(-pi, pi),
                                  random.randint(0, self.action_dim - 1),
-                                 u_v_max, u_h_max, na, dc, dp, dt) for i in range(self.n_uav)]
+                                 u_v_max, u_h_max, na, dc, dp, dt,do) for i in range(self.n_uav)]
         else:
             print("wrong init position")
 
@@ -242,7 +234,7 @@ class Environment:
         self.position['all_uav_xs'].append(uav_xs)
         self.position['all_uav_ys'].append(uav_ys)
         #新增 障碍物位置
-        obstacle_xs,obstacle_ys = self.__get_all_target_position()
+        obstacle_xs,obstacle_ys = self.__get_all_obstacle_position()
         self.position['all_obstacle_xs'].append(obstacle_xs)
         self.position['all_obstacle_ys'].append(obstacle_ys)
 
@@ -351,7 +343,7 @@ class Environment:
             boundary_punishment = clip_and_normalize(boundary_punishment, -1/2, 0, -1)
 
             #新增 碰撞惩罚
-            obstacle_punishment = clip_and_normalize(obstacle_punishment, -1/2, 0, -1)
+            obstacle_punishment = clip_and_normalize(obstacle_punishment, -1, 0, -1)
 
             # 保存奖励和惩罚
             target_tracking_rewards.append(target_tracking_reward)
@@ -384,6 +376,7 @@ class Environment:
         :param epoch_i:
         :return:
         """
+        # os.makedirs(os.path.join(save_dir, "o_xy"), exist_ok=True)
         u_xy = np.array([self.position["all_uav_xs"],
                          self.position["all_uav_ys"]]).transpose()  # n_uav * num_steps * 2
         t_xy = np.array([self.position["all_target_xs"],
@@ -419,6 +412,7 @@ class Environment:
         :param epoch_i:
         :return:
         """
+        os.makedirs(os.path.join(save_dir, "obstacle_num"), exist_ok=True)
         covered_obstacle_num_array = np.array(self.covered_obstacle_num).reshape(-1, 1)
 
         np.savetxt(os.path.join(save_dir , "obstacle_num", 'obstacle_num' + str(epoch_i) + '.csv'),
@@ -445,9 +439,8 @@ class Environment:
 
         covered_obstacle_num = 0
         for obstacle in self.obstacle_list:
-            covered_obstacle_num += 1
             for uav in self.uav_list:
-                if uav.distance(uav.x,uav.y,obstacle.x,obstacle.y) < uav.dp:
+                if uav.distance(uav.x,uav.y,obstacle.x,obstacle.y) < uav.do:
                     covered_obstacle_num += 1
                     break
         return covered_obstacle_num

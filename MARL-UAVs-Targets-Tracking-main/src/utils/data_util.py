@@ -13,6 +13,7 @@ def save_csv(config, return_list):
         'target_tracking_return_list' :target_tracking_return_list, 跟踪奖励列表
         'boundary_punishment_return_list':boundary_punishment_return_list, 边界惩罚
         'duplicate_tracking_punishment_return_list':duplicate_tracking_punishment_return_list 重复追踪惩罚
+        'obstacle_punishment_return_list':obstacle_punishment_return_list #障碍物惩罚
     }
     :return:
     """
@@ -42,10 +43,10 @@ def save_csv(config, return_list):
         for reward in return_list['duplicate_tracking_punishment_return_list']:
             writer.writerow([reward])
 
-    with open(os.path.join(config["save_dir"], 'duplicate_obstacle_return_list.csv'), mode='w', newline='') as file:
+    with open(os.path.join(config["save_dir"], 'obstacle_punishment_return_list.csv'), mode='w', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow(['duplicate_obstacle'])
-        for reward in return_list['duplicate_obstacle_return_list']:
+        writer.writerow(['obstacle_punishment'])
+        for reward in return_list['obstacle_punishment_return_list']:
             writer.writerow([reward])
 
 

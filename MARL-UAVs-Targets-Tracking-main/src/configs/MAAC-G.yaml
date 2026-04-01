@@ -22,6 +22,7 @@ uav:
   h_max: 6  # 表示 pi / 6
   dc: 500
   dp: 200
+  do: 300
   alpha: 0.6
   beta: 0.2
   gamma: 0.2

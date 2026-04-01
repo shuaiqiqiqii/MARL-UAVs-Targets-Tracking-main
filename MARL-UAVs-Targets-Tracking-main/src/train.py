@@ -373,7 +373,7 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                         pmi.save(save_dir=config["save_dir"], epoch_i=i + 1)
                     env.save_position(save_dir=config["save_dir"], epoch_i=i + 1)
                     env.save_covered_num(save_dir=config["save_dir"], epoch_i=i + 1)
-                    env.save_obstacles(save_dir=config["save_dir"], epoch_i=i + 1)
+                    env.save_obstacle_num(save_dir=config["save_dir"], epoch_i=i + 1)
 
                 # episode end
                 pbar.update(1)
