@@ -1,0 +1,46 @@
+actor_critic:
+  actor_lr: 1e-4
+  buffer_size: 1000000
+  critic_lr: 1e-4
+  gamma: 0.95
+  hidden_dim: 128
+  sample_size: 0
+cooperative: 0.3
+devices:
+- !!python/object/apply:torch.device
+  - cuda
+  - 0
+environment:
+  m_targets: 3
+  n_obstacles: 1
+  n_uav: 3
+  na: 12
+  x_max: 2000
+  y_max: 2000
+exp_name: MAAC-R
+first_device: 0
+gpus: 1
+obstacle:
+  h_max: 6
+  v_max: 5
+pmi:
+  b2_size: 1000
+  batch_size: 32
+  hidden_dim: 64
+result_dir: ../results/MAAC-R
+save_dir: ../results/MAAC-R\MAAC-R_2026-Apr-01-21-55-53_41264
+seed: 42
+target:
+  h_max: 6
+  v_max: 5
+uav:
+  alpha: 0.6
+  beta: 0.2
+  dc: 500
+  do: 300
+  dp: 200
+  dt: 1
+  gamma: 0.2
+  h_max: 6
+  omega: 0.2
+  v_max: 20

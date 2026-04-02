@@ -13,85 +13,34 @@ from matplotlib.lines import lineStyles
 text_obj = None
 
 
-# def update(ax, env, uav_plots, target_plots, uav_search_patches, frame, frames, num_steps, interval=1, paint_all=True):
-#     global text_obj
-#
-#     # 彻底删掉 frame==0 的 return，让所有帧都执行绘图
-#     # if frame == 0:
-#     #     return
-#
-#     # 切片改为 0:frame+1:interval，保证每帧都有数据
-#     end_idx = frame + 1
-#     #更新无人机的位置和感知范围
-#     for i, uav in enumerate(env.uav_list):
-#         #获取当前帧之前所有无人机的xy坐标
-#         uav_x = env.position['all_uav_xs'][0:end_idx:interval]
-#         uav_y = env.position['all_uav_ys'][0:end_idx:interval]
-#         #空值检查
-#         if not uav_x or not uav_y:
-#             print(f"Warning: UAV {i} empty at frame {frame}")
-#             continue
-#         #提取i个无人机的坐标
-#         uav_x = [sublist[i] for sublist in uav_x]
-#         uav_y = [sublist[i] for sublist in uav_y]
-#         #更新无人机散点图
-#         if uav_x and uav_y:
-#             uav_plots[i].set_offsets(np.column_stack([uav_x, uav_y]))
-#             uav_plots[i].set_color('blue')
-#             uav_plots[i].set_sizes([20])  # 保证点足够大
-#             uav_search_patches[i].center = (uav_x[-1], uav_y[-1])
-#     #更新目标位置
-#     for i in range(env.m_targets):
-#         target_x = env.position['all_target_xs'][0:end_idx:interval]
-#         target_y = env.position['all_target_ys'][0:end_idx:interval]
-#
-#         if not target_x or not target_y:
-#             print(f"Warning: Target {i} empty at frame {frame}")
-#             continue
-#
-#         target_x = [sublist[i] for sublist in target_x]
-#         target_y = [sublist[i] for sublist in target_y]
-#
-#         if target_x and target_y:
-#             target_plots[i].set_offsets(np.column_stack([target_x, target_y]))
-#             target_plots[i].set_color('red')
-#             target_plots[i].set_sizes([30])
-#
-#     # 避免 covered_target_num 越界
-#     covered_num = env.covered_target_num[frame] if frame < len(env.covered_target_num) else 0
-#     detect_rate = covered_num / env.m_targets * 100 if env.m_targets > 0 else 0.0
-#     #更新统计文本
-#     text_str = (
-#         f"detected target num = {covered_num}\n"
-#         f"detected target rate = {detect_rate:.2f}%"
-#     )
-#
-#   #安全清理旧文本
-#     if text_obj is not None:
-#         try:
-#             text_obj.remove()
-#         except ValueError:
-#             pass  # 防止对象已被销毁时报错
-#     #绘制新文本
-#     text_obj = ax.text(0.02, 0.98, text_str, transform=ax.transAxes,
-#                        fontsize=10, verticalalignment='top', color='black',
-#                        bbox=dict(facecolor='white', alpha=0.8))
 
+#替换原先函数
+#生成高精度图像
 
+# def resize_image(image_path):
+#     """
+#     调整图片尺寸为16的倍数，避免视频编码器报错
+#     :param image_path:
+#     :return:
+#     """
+#     img = Image.open(image_path).convert('RGB')
+#     # Resize the image to be divisible by 16
+#     new_width = (img.width // 16) * 16
+#     new_height = (img.height // 16) * 16
+#     if new_width != img.width or new_height != img.height:
+#         img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)  # Updated to use Image.Resampling.LANCZOS
+#     return np.array(img)
 def resize_image(image_path):
     """
-    调整图片尺寸为16的倍数，避免视频编码器报错
-    :param image_path:
-    :return:
+    调整图片尺寸为16的倍数，避免视频编码器报错，同时保持高清
     """
     img = Image.open(image_path).convert('RGB')
-    # Resize the image to be divisible by 16
     new_width = (img.width // 16) * 16
     new_height = (img.height // 16) * 16
     if new_width != img.width or new_height != img.height:
-        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)  # Updated to use Image.Resampling.LANCZOS
+        # ✅ 用最高质量重采样，不损失清晰度
+        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
     return np.array(img)
-
 def get_gradient_color(start_color, end_color, num_points, idx):
     """
     生成渐变颜色
@@ -185,104 +134,140 @@ def update(ax, env, uav_plots, target_plots,obstacle_plots, uav_search_patches, 
     # 绘制新的文本对象，没有边框，颜色为深蓝色
     text_obj = ax.text(0.02, 0.98, text_str, transform=ax.transAxes, fontsize=10, verticalalignment='top',
                        color='black')
-
+#替换原先的视频生成
+#生成高精度图像
 
 def draw_animation(config, env, num_steps, ep_num, frames=100):
-    plt.switch_backend('Agg')  # 无GUI环境推荐，有GUI可换'TkAgg'
-    #固定画布大小和分辨率
-    fig, ax = plt.subplots(figsize=(6, 6),dpi=60)
-    # ax.set_xlim(-env.x_max / 3, env.x_max / 3 * 4)
-    # ax.set_ylim(-env.y_max / 3, env.y_max / 3 * 4)
-    ax.set_xlim(0, 2000)  # 强制固定x轴范围
-    ax.set_ylim(0, 2000)  # 强制固定y轴范围
-    ax.set_aspect('equal')  # 保持等比例
-    ax.set_xlabel('X Position')
-    ax.set_ylabel('Y Position')
+    plt.switch_backend('Agg')
+    # ✅ 论文级高清：画布放大 + 300 DPI（关键！）
+    fig, ax = plt.subplots(figsize=(10, 10), dpi=300)
+    ax.set_xlim(0, 2000)
+    ax.set_ylim(0, 2000)
+    ax.set_aspect('equal')
+    ax.set_xlabel('X Position', fontsize=12)
+    ax.set_ylabel('Y Position', fontsize=12)
+    ax.tick_params(labelsize=10)
 
-
-    #绘制轨迹、感知圈、文本
-    uav_plots = [ax.scatter([], [], marker='o', color='b', linestyle='None', s=2,alpha=1) for _ in range(env.n_uav)]
-    target_plots = [ax.scatter([], [], marker='o', color='r', linestyle='None', s=3,alpha=1) for _ in range(env.m_targets)]
-    #new
-    obstacle_plots = [ax.scatter([],[],marker='o',color='grey',linestyle = 'None',s=4,alpha=1) for _ in range(env.n_obstacles)]
+    # 初始化绘图元素
+    uav_plots = [ax.scatter([], [], marker='o', color='b', linestyle='None', s=20, alpha=1) for _ in range(env.n_uav)]
+    target_plots = [ax.scatter([], [], marker='o', color='r', linestyle='None', s=30, alpha=1) for _ in range(env.m_targets)]
+    obstacle_plots = [ax.scatter([], [], marker='s', color='grey', linestyle='None', s=40, alpha=1) for _ in range(env.n_obstacles)]
     uav_search_patches = [patches.Circle((0, 0), uav.dp, color='lightblue', alpha=0.2) for uav in env.uav_list]
-    uav_search_obstacle = [patches.Circle((0,0), uav.do,color = 'lightgrey',alpha=0.2 ) for uav in env.uav_list]
-
+    uav_obstacle_patches = [patches.Circle((0, 0), uav.do, color='lightgrey', alpha=0.2) for uav in env.uav_list]
 
     for patch in uav_search_patches:
         ax.add_patch(patch)
-    for patch in uav_search_obstacle:
+    for patch in uav_obstacle_patches:
         ax.add_patch(patch)
 
-    # save_dir = os.path.join(config["save_dir"], "frames")
-    # os.makedirs(save_dir, exist_ok=True)
+    # ✅ 按 episode 分目录，保留高清帧（不再自动删除）
     save_dir = os.path.join(config["save_dir"], "frames", f"episode_{ep_num + 1}")
-    os.makedirs(save_dir, exist_ok=True)  # 按episode分目录，避免覆盖
-    saved_frames = []  # 记录保存的帧路径，避免漏帧
-    # Save frames at intervals of 5 num_steps
-    step_interval = 5
+    os.makedirs(save_dir, exist_ok=True)
+    saved_frames = []
+    step_interval = 5  # 每5步一帧，平衡流畅度和文件大小
 
     for frame in range(0, num_steps, step_interval):
-        update(ax, env, uav_plots, target_plots,obstacle_plots, uav_search_patches, frame, frames, num_steps)
-        # 核心修复：强制渲染画布（没有这步就是空白！）
-        fig.canvas.draw()  # 触发渲染
-        fig.canvas.flush_events()  # 刷新事件
+        update(ax, env, uav_plots, target_plots, obstacle_plots, uav_search_patches, frame, frames, num_steps)
+        fig.canvas.draw()
+        fig.canvas.flush_events()
 
-        # 保存帧（确保路径正确）
+        # ✅ 论文级保存：高DPI、无白边、无损PNG
         frame_path = os.path.join(save_dir, f'frame_{frame:04d}.png')
-        plt.savefig(frame_path, bbox_inches=None, pad_inches=0)  # 去除白边
+        plt.savefig(frame_path, dpi=300, bbox_inches='tight', pad_inches=0.1, format='png')
         saved_frames.append(frame_path)
-        # plt.pause(0.001)  # 确保渲染完成
         plt.draw()
-        # plt.pause(0.001)  # Pause to ensure the plot updates visibly if needed
 
     plt.close(fig)
 
-    # Generate MP4
+    # ✅ 生成高清MP4（可选，保留动画）
     video_path = os.path.join(config["save_dir"], "animated", f'animated_plot_{ep_num + 1}.mp4')
-    writer = imageio.get_writer(video_path, fps=5, codec='libx264', format='FFMPEG', pixelformat='yuv420p')
+    os.makedirs(os.path.dirname(video_path), exist_ok=True)
+    writer = imageio.get_writer(video_path, fps=10, codec='libx264', format='FFMPEG', pixelformat='yuv420p', quality=10)
 
-    for frame in range(0, num_steps, step_interval):
-        frame_path = os.path.join(save_dir, f'frame_{frame:04d}.png')
+    for frame_path in saved_frames:
         if os.path.exists(frame_path):
             img_array = resize_image(frame_path)
             writer.append_data(img_array)
     writer.close()
 
-    # Optionally remove PNG files
-    for frame in range(0, num_steps, step_interval):
-        frame_path = os.path.join(save_dir, f'frame_{frame:04d}.png')
-        if os.path.exists(frame_path):
-            os.remove(frame_path)
+    # ✅ 【关键修改】注释掉自动删除，保留高清原图！
+    # for frame_path in saved_frames:
+    #     if os.path.exists(frame_path):
+    #         os.remove(frame_path)
 
 
-
+#可用版本 但是只能生成视频
 # def draw_animation(config, env, num_steps, ep_num, frames=100):
-#     fig, ax = plt.subplots(figsize=(8, 8))
-#     ax.set_xlim(0, env.x_max)
-#     ax.set_ylim(0, env.y_max)
-#     # 初始化点大小
-#     uav_plots = [ax.scatter([], [], marker='o', color='b', s=20, alpha=1) for _ in range(env.n_uav)]
-#     target_plots = [ax.scatter([], [], marker='o', color='r', s=30, alpha=1) for _ in range(env.m_targets)]
-#     #初始化无人机的感知范围
+#     plt.switch_backend('Agg')  # 无GUI环境推荐，有GUI可换'TkAgg'
+#     #固定画布大小和分辨率
+#     fig, ax = plt.subplots(figsize=(6, 6),dpi=60)
+#     # ax.set_xlim(-env.x_max / 3, env.x_max / 3 * 4)
+#     # ax.set_ylim(-env.y_max / 3, env.y_max / 3 * 4)
+#     ax.set_xlim(0, 2000)  # 强制固定x轴范围
+#     ax.set_ylim(0, 2000)  # 强制固定y轴范围
+#     ax.set_aspect('equal')  # 保持等比例
+#     ax.set_xlabel('X Position')
+#     ax.set_ylabel('Y Position')
+#
+#
+#     #绘制轨迹、感知圈、文本
+#     uav_plots = [ax.scatter([], [], marker='o', color='b', linestyle='None', s=2,alpha=1) for _ in range(env.n_uav)]
+#     target_plots = [ax.scatter([], [], marker='o', color='r', linestyle='None', s=3,alpha=1) for _ in range(env.m_targets)]
+#     #new
+#     obstacle_plots = [ax.scatter([],[],marker='o',color='grey',linestyle = 'None',s=4,alpha=1) for _ in range(env.n_obstacles)]
 #     uav_search_patches = [patches.Circle((0, 0), uav.dp, color='lightblue', alpha=0.2) for uav in env.uav_list]
+#     uav_search_obstacle = [patches.Circle((0,0), uav.do,color = 'lightgrey',alpha=0.2 ) for uav in env.uav_list]
+#
+#
 #     for patch in uav_search_patches:
 #         ax.add_patch(patch)
-#     #创建帧保存目录
-#     save_dir = os.path.join(config["save_dir"], "frames")
-#     os.makedirs(save_dir, exist_ok=True)
+#     for patch in uav_search_obstacle:
+#         ax.add_patch(patch)
 #
-#     # step_interval 强制设为 1，保证每帧都有完整数据
-#     step_interval = 1
+#     # save_dir = os.path.join(config["save_dir"], "frames")
+#     # os.makedirs(save_dir, exist_ok=True)
+#     save_dir = os.path.join(config["save_dir"], "frames", f"episode_{ep_num + 1}")
+#     os.makedirs(save_dir, exist_ok=True)  # 按episode分目录，避免覆盖
+#     saved_frames = []  # 记录保存的帧路径，避免漏帧
+#     # Save frames at intervals of 5 num_steps
+#     step_interval = 5
+#
 #     for frame in range(0, num_steps, step_interval):
-#         update(ax, env, uav_plots, target_plots, uav_search_patches,
-#                frame, frames, num_steps, interval=step_interval)
+#         update(ax, env, uav_plots, target_plots,obstacle_plots, uav_search_patches, frame, frames, num_steps)
+#         # 核心修复：强制渲染画布（没有这步就是空白！）
+#         fig.canvas.draw()  # 触发渲染
+#         fig.canvas.flush_events()  # 刷新事件
+#
+#         # 保存帧（确保路径正确）
+#         frame_path = os.path.join(save_dir, f'frame_{frame:04d}.png')
+#         plt.savefig(frame_path, bbox_inches=None, pad_inches=0)  # 去除白边
+#         saved_frames.append(frame_path)
+#         # plt.pause(0.001)  # 确保渲染完成
 #         plt.draw()
-#         plt.savefig(os.path.join(save_dir, f'frame_{frame:04d}.png'), dpi=150)
-#         # 每次 save 后重置 scatter，避免累积数据导致空白
-#         for plot in uav_plots + target_plots:
-#             plot.set_offsets(np.empty((0, 2)))  # 清空点数据，让下一帧重新画
+#         # plt.pause(0.001)  # Pause to ensure the plot updates visibly if needed
+#
 #     plt.close(fig)
+#
+#     # Generate MP4
+#     video_path = os.path.join(config["save_dir"], "animated", f'animated_plot_{ep_num + 1}.mp4')
+#     writer = imageio.get_writer(video_path, fps=5, codec='libx264', format='FFMPEG', pixelformat='yuv420p')
+#
+#     for frame in range(0, num_steps, step_interval):
+#         frame_path = os.path.join(save_dir, f'frame_{frame:04d}.png')
+#         if os.path.exists(frame_path):
+#             img_array = resize_image(frame_path)
+#             writer.append_data(img_array)
+#     writer.close()
+#
+#     # Optionally remove PNG files
+#     for frame in range(0, num_steps, step_interval):
+#         frame_path = os.path.join(save_dir, f'frame_{frame:04d}.png')
+#         if os.path.exists(frame_path):
+#             os.remove(frame_path)
+
+
+
+
 
 def plot_reward_curve(config, return_list, name):
     """
