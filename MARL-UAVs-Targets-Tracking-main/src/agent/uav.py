@@ -90,7 +90,7 @@ class UAV:
         na = a_idx + 1  # 从 1 开始索引
         return (2 * na - self.Na - 1) * self.h_max / (self.Na - 1)
 
-    def update_position(self, action: 'int') -> (float, float, float):
+    def update_position(self, action: 'int',x_max,y_max) -> (float, float, float):
         """
          执行动作 → 更新位置和航向角
         receive the index from action space, then update the current position
@@ -104,6 +104,21 @@ class UAV:
         dy = self.dt * self.v_max * sin(self.h)  # y 方向位移
         self.x += dx
         self.y += dy
+        #新增碰撞反弹。模拟真实轨迹
+        # 左右边界反弹
+        if self.x <= 2 or self.x >=x_max - 2:
+            self.h = pi - self.h
+
+        # 上下边界反弹
+        if self.y <= 2 or self.y >= y_max - 2:
+            self.h = -self.h
+
+        # ===================== 安全锁边（绝不越界） =====================
+        self.x = np.clip(self.x, 2, x_max - 2)
+        self.y = np.clip(self.y, 2, y_max - 2)
+
+
+
         self.h += self.dt * a  # 更新朝向角度
         self.h = (self.h + pi) % (2 * pi) - pi  # 确保朝向角度在 [-pi, pi) 范围内
 

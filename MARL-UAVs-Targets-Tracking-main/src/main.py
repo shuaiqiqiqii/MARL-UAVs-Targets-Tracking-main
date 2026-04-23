@@ -139,7 +139,7 @@ if __name__ == "__main__":
 
     # 添加超参数
     parser.add_argument("--phase", type=str, default="train", choices=["train", "evaluate", "run"])
-    parser.add_argument("-e", "--num_episodes", type=int, default=100, help="训练轮数")
+    parser.add_argument("-e", "--num_episodes", type=int, default=1000, help="训练轮数")
     parser.add_argument("-s", "--num_steps", type=int, default=200, help="每轮进行步数")
     parser.add_argument("-f", "--frequency", type=int, default=100, help="打印信息及保存的频率")
     parser.add_argument("-a", "--actor_path", type=str, default=None, help="actor网络权重的路径")

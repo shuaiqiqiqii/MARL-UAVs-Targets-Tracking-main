@@ -1,6 +1,9 @@
 from math import cos, sin, pi
 import random
 
+import numpy as np
+
+
 #目标类
 class TARGET:
     def __init__(self, x0: float, y0: float, h0: float, a0: float, v_max: float, h_max: float, dt):
@@ -51,12 +54,39 @@ class TARGET:
         # self.h += self.dt * self.a  # 更新朝向角度
         # self.h = (self.h + pi) % (2 * pi) - pi  # 确保朝向角度在 [-pi, pi) 范围内
         #添加了边界反弹
-        if 0 > self.y or self.y > y_max:
-            self.h = -self.h
-        elif self.x < 0 or self.x > x_max:
-            if self.h > 0:
-                self.h = pi-self.h
-            else:
-                self.h = -pi-self.h
+
+        #原先的版本，现进行修改
+        # if 0 > self.y or self.y > y_max:
+        #     self.h = -self.h
+        # elif self.x < 0 or self.x > x_max:
+        #     if self.h > 0:
+        #         self.h = pi-self.h
+        #     else:
+        #         self.h = -pi-self.h
+        #
+        # return self.x, self.y
+        # ===================== 【修复】边界反弹逻辑 =====================
+        # 碰到上下边界 → 垂直反弹
+        # --------------------- 安全边界限制（不反弹，永不越界） ---------------------
+        # ===================== 真实物理反弹（自然流畅） =====================
+        hit_boundary = False
+
+        # 左右边界反弹（X 轴）
+        if self.x <= 2 or self.x >= x_max - 2:
+            self.h = pi - self.h  # 水平反弹
+            hit_boundary = True
+
+        # 上下边界反弹（Y 轴）
+        if self.y <= 2 or self.y >= y_max - 2:
+            self.h = -self.h  # 垂直反弹
+            hit_boundary = True
+
+        # ===================== 安全锁边（绝不越界，绝不卡 0 距离） =====================
+        self.x = np.clip(self.x, 2, x_max - 2)
+        self.y = np.clip(self.y, 2, y_max - 2)
+
+        # 更新朝向
+        self.h += self.dt * self.a
+        self.h = (self.h + pi) % (2 * pi) - pi
 
         return self.x, self.y

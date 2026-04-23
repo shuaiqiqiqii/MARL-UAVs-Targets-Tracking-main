@@ -117,7 +117,7 @@ class Environment:
                             for _ in range(self.m_targets)]
         self.position = {'all_uav_xs': [], 'all_uav_ys': [], 'all_target_xs': [], 'all_target_ys': [],'all_obstacle_xs': [], 'all_obstacle_ys': []}
         self.covered_target_num = []
-        self.track_obstacle_num = []
+
 
         #新增
         # 初始化障碍物列表 （随机位置、随机航向角、随机转向角）
@@ -130,7 +130,7 @@ class Environment:
         # self.position = {'all_'}
         #碰撞和覆盖集合
         self.covered_obstacle_num = []
-        self.track_obstacle_num = []
+
 
 
 
@@ -197,7 +197,10 @@ class Environment:
 
         #更新所有无人机位置
         for i, uav in enumerate(self.uav_list):
-            uav.update_position(actions[i]) #执行动作，更新位置
+            uav.update_position(actions[i],self.x_max,self.y_max) #执行动作，更新位置
+            # #加入限制条件，防止无人机出框
+            # uav.x = np.clip(uav.x, 10, self.x_max - 10)
+            # uav.y = np.clip(uav.y, 10, self.y_max - 10)
 
             # observation and communication 观测与交流
             uav.observe_target(self.target_list) #观测目标
@@ -412,10 +415,10 @@ class Environment:
         :param epoch_i:
         :return:
         """
-        os.makedirs(os.path.join(save_dir, "obstacle_num"), exist_ok=True)
+        os.makedirs(os.path.join(save_dir, "covered_obstacle_num"), exist_ok=True)
         covered_obstacle_num_array = np.array(self.covered_obstacle_num).reshape(-1, 1)
 
-        np.savetxt(os.path.join(save_dir , "obstacle_num", 'obstacle_num' + str(epoch_i) + '.csv'),
+        np.savetxt(os.path.join(save_dir , "covered_obstacle_num", 'covered_obstacle_num' + str(epoch_i) + '.csv'),
                    covered_obstacle_num_array, delimiter=',', header='covered_obstacle_num', comments='')
 
     def calculate_covered_target(self):
