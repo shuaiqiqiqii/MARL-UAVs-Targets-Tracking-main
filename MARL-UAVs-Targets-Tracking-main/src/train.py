@@ -7,7 +7,10 @@ from utils.draw_util import draw_animation
 from torch.utils.tensorboard import SummaryWriter
 import random
 import collections
-
+import torch.nn.functional as F
+from utils.exploration import GridExplorationBonus
+# 强制使用CPU，避免50系显卡报错
+torch.cuda.is_available = lambda : False
 
 #训练结果存储类
 class ReturnValueOfTrain:
@@ -17,12 +20,14 @@ class ReturnValueOfTrain:
         self.target_tracking_return_list = [] #目标追踪奖励列表
         self.boundary_punishment_return_list = [] #越界惩罚列表
         self.duplicate_tracking_punishment_return_list = [] #重复追踪惩罚
+
         self.average_covered_targets_list = [] #平均覆盖目标数量列表
         self.max_covered_targets_list = [] #最大覆盖目标数量列表
         #新增的碰撞惩罚列表 平均碰撞和最大碰撞列表
         self.obstacle_punishment_return_list = []
         self.average_covered_obstacles_list = []
         self.max_covered_obstacles_list = []
+
 
     def item(self):
         """
@@ -60,13 +65,13 @@ class ReturnValueOfTrain:
         self.target_tracking_return_list.append(tt_return)
         self.boundary_punishment_return_list.append(bp_return)
         self.duplicate_tracking_punishment_return_list.append(dtp_return)
+
         self.average_covered_targets_list.append(average_targets)
         self.max_covered_targets_list.append(max_targets)
 
         self.obstacle_punishment_return_list.append(op_return)
         self.average_covered_obstacles_list.append(average_obstacle)
         self.max_covered_obstacles_list.append(max_obstacle)
-
 
 
 #基础经验回访池，存储训练过程中的经验(状态-》动作-》奖励-》下一状态)，随机采样
@@ -200,160 +205,234 @@ class PrioritizedReplayBuffer:
     def size(self):
         return len(self.buffer)
 
+def operate_epoch(config, env, agent, pmi, num_steps, cwriter_state=None, cwriter_prob=None,debug_print = False,explorer=None):
+    transition_dict = {'states': [], 'actions': [], 'next_states': [], 'rewards': [], 'log_probs': []}
+    log_prob_list = []
+    episode_return = 0
+    episode_target_tracking_return = 0
+    episode_boundary_punishment_return = 0
+    episode_duplicate_tracking_punishment_return = 0
+    episode_obstacle_punishment_return = 0
 
-def operate_epoch(config, env, agent, pmi, num_steps, cwriter_state=None, cwriter_prob=None):
-    """
-    单论训练，返回该轮次的经验和指标，记录一轮训练的完整流程
-    无人机选取动作-》环境更新 -》累加奖励 -》归一化返回
-    :param config:配置字典
-    :param env:仿真环境
-    :param agent:  Actor-Critic智能体
-    :param pmi:  PMI网络
-    :param num_steps: 每轮步数
-    :param cwriter_state: 用于记录一个epoch内的state信息, 调试bug时使用
-    :param cwriter_prob:  用于记录一个epoch内的prob信息, 调试bug时使用
-    :return: 经验字典和各类指标
-    """
-    transition_dict = {'states': [], 'actions': [], 'next_states': [], 'rewards': []}
-    episode_return = 0 #总奖励
-    episode_target_tracking_return = 0#追踪奖励
-    episode_boundary_punishment_return = 0 #越界惩罚
-    episode_duplicate_tracking_punishment_return = 0 #重复追踪惩罚
-    #new
-    episode_obstacle_punishment_return = 0 #碰撞惩罚
 
-    covered_targets_list = [] #每步覆盖的目标数
-    covered_obstacles_list = [] #碰撞数
+
+
+    covered_targets_list = []
+    covered_obstacles_list = []
 
     for i in range(num_steps):
-        config['step'] = i + 1 #记录当前步数
-        action_list = [] #所有无人机的动作列表
-
-        # each uav makes choices first
+        action_list = []
+        all_states = []
         for uav in env.uav_list:
-            state = uav.get_local_state() #获取无人机的局部状态
-            if cwriter_state:
-                cwriter_state.writerow(state.tolist())
-            action, probs = agent.take_action(state)
-            if cwriter_prob:
-                cwriter_prob.writerow(probs.tolist())
-            transition_dict['states'].append(state)
-            action_list.append(action.item())
+            st = uav.get_local_state()  # [16,] numpy
+            all_states.append(st)
 
-        # use action_list to update the environment
-        #TODO: 增加返回列表
-        next_state_list, reward_list, covered_targets,covered_obstacles = env.step(config, pmi, action_list)  # action: List[int]
+        # 使用 PMI 计算同一时间步所有无人机的内在奖励
+        intrinsic_rewards = np.zeros(env.n_uav)
+        if pmi is not None:
+            with torch.no_grad():
+                tensor_states = torch.FloatTensor(np.array(all_states)).to(agent.device)
+                pmi_vals = pmi(tensor_states).squeeze()  # [N]
+                # 简单内在奖励：PMI 值本身（可加权重）
+                intrinsic_rewards = pmi_vals.cpu().numpy() * config.get("pmi_weight", 0.1)
+
+        for idx, uav in enumerate(env.uav_list):
+            state_np = all_states[idx]  # 保持 16 维，不拼接
+            state_tensor = torch.FloatTensor(state_np).unsqueeze(0).to(agent.device)
+            action, log_prob = agent.take_action(state_tensor)
+            action_list.append(action)
+            log_prob_list.append(log_prob)
+            transition_dict['states'].append(state_np)
+
+        next_state_list, reward_list, covered_targets, covered_obstacles = env.step(config, pmi, action_list)
+        # 计算探索奖励（需要 explorer 对象）
+        if explorer is not None:
+            exp_bonus = np.array([explorer.get_bonus(uav.x, uav.y) for uav in env.uav_list])
+            for uav in env.uav_list:
+                explorer.update(uav.x, uav.y)
+        else:
+            exp_bonus = np.zeros(env.n_uav)
+
+        # if debug_print:
+        #     print(f"----- Episode step {i + 1} -----")
+        #     for uav_idx in range(env.n_uav):
+        #         tt = reward_list['target_tracking_reward'][uav_idx]
+        #         bp = reward_list['boundary_punishment'][uav_idx]
+        #         dp = reward_list['duplicate_tracking_punishment'][uav_idx]
+        #         op = reward_list['obstacle_punishment'][uav_idx]
+        #         total = reward_list['rewards'][uav_idx]
+        #     #     print(
+        #     #         f"  UAV {uav_idx}: track={tt:+.3f}, boundary={bp:+.3f}, dup={dp:+.3f}, obstacle={op:+.3f} → total={total:+.3f}")
+        #     # print("")  # 空行分隔
+
+        # 将环境奖励与内在奖励相加
+        env_rewards = np.array(reward_list['rewards'])
+        total_rewards = env_rewards + intrinsic_rewards  # 混合奖励
+
         transition_dict['actions'].extend(action_list)
         transition_dict['next_states'].extend(next_state_list)
-        transition_dict['rewards'].extend(reward_list['rewards'])
+        transition_dict['rewards'].extend(total_rewards.tolist())
+        transition_dict['log_probs'] = log_prob_list
 
-
-        #累加该轮的指标
-        episode_return += sum(reward_list['rewards'])
+        episode_return += sum(total_rewards)
         episode_target_tracking_return += sum(reward_list['target_tracking_reward'])
         episode_boundary_punishment_return += sum(reward_list['boundary_punishment'])
         episode_duplicate_tracking_punishment_return += sum(reward_list['duplicate_tracking_punishment'])
-        #new
         episode_obstacle_punishment_return += sum(reward_list['obstacle_punishment'])
+
         covered_targets_list.append(covered_targets)
         covered_obstacles_list.append(covered_obstacles)
-    #计算该轮的平均指标 TODO: 新增碰撞
+
     episode_return /= num_steps * env.n_uav
     episode_target_tracking_return /= num_steps * env.n_uav
     episode_boundary_punishment_return /= num_steps * env.n_uav
     episode_duplicate_tracking_punishment_return /= num_steps * env.n_uav
     episode_obstacle_punishment_return /= num_steps * env.n_uav
 
+
     average_covered_targets = np.mean(covered_targets_list)
     average_covered_obstacles = np.mean(covered_obstacles_list)
-
     max_covered_targets = np.max(covered_targets_list)
     max_covered_obstacles = np.max(covered_obstacles_list)
 
     return (transition_dict, episode_return, episode_target_tracking_return,
-            episode_boundary_punishment_return, episode_duplicate_tracking_punishment_return,episode_obstacle_punishment_return,
+            episode_boundary_punishment_return,episode_duplicate_tracking_punishment_return,episode_obstacle_punishment_return,
             average_covered_targets, average_covered_obstacles,max_covered_targets, max_covered_obstacles)
 
-#训练主函数
-#轮次循环 -》 环境重置 -》单论训练 -》经验回放 -》网络更新 -》保存
 def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
-    """
-    总体训练函数 TODO: 增加碰撞相关内容
-    :param config: 配置
-    :param pmi: pmi network
-    :param frequency: 打印消息的频率
-    :param num_steps: 每局进行的步数
-    :param env: 环境变量
-    :param agent: # Actor-Critic智能体   因为所有的无人机共享权重训练, 所以共用一个agent
-    :param num_episodes: 局数
-    :return:
-    """
-    # initialize saving list
     save_dir = os.path.join(config["save_dir"], "logs")
-    writer = SummaryWriter(log_dir=save_dir)  # 可以指定log存储的目录
+    writer = SummaryWriter(log_dir=save_dir)
     return_value = ReturnValueOfTrain()
-    # buffer = ReplayBuffer(config["actor_critic"]["buffer_size"])
-    buffer = PrioritizedReplayBuffer(config["actor_critic"]["buffer_size"])
-    #计算采样批次大小
-    if config["actor_critic"]["sample_size"] > 0:
-        sample_size = config["actor_critic"]["sample_size"]
-    else:
-        sample_size = config["environment"]["n_uav"] * num_steps
-    #记录state prob
+    INIT_SIZE, FINAL_SIZE = 1000, 2000 #地图的初始大小和最终大小
+    INIT_DP, FINAL_DP = 500, 300 #探索范围的初始大小和最终大小
+    INIT_GAMMA, FINAL_GAMMA = 0.05, 0.15  # 重复惩罚权重
+    INIT_TARGETS, FINAL_TARGETS = 7, 5 #目标数量
+    INIT_OBS, FINAL_OBS = 1, 3  #障碍数量
+
+
+
+    # 课程开始 / 结束的回合
+    COURSE_START = 0
+    COURSE_END = 2000  # 1500回合后达到最终难度
+    explorer = GridExplorationBonus(INIT_SIZE, INIT_SIZE, grid_size=80, bonus_weight=0.00)
+    # ===================== 修复：MAPPO不创建回放池 =====================
+    buffer = None
+    sample_size = 0
+    if config['method'] != "MAPPO":
+        buffer = PrioritizedReplayBuffer(config["actor_critic"]["buffer_size"])
+        sample_size = config["actor_critic"]["sample_size"] if config["actor_critic"]["sample_size"] > 0 else config["environment"]["n_uav"] * num_steps
+
     with open(os.path.join(save_dir, 'state.csv'), mode='w', newline='') as state_file, \
             open(os.path.join(save_dir, 'prob.csv'), mode='w', newline='') as prob_file:
         cwriter_state = csv.writer(state_file)
         cwriter_prob = csv.writer(prob_file)
+        cwriter_state.writerow(['state'])
+        cwriter_prob.writerow(['prob'])
 
-        cwriter_state.writerow(['state'])  # 写入state.csv的表头
-        cwriter_prob.writerow(['prob'])  # 写入prob.csv的表头
-    #启动训练进度条
+
+
         with tqdm(total=num_episodes, desc='Episodes') as pbar:
             for i in range(num_episodes):
-                # reset environment from config yaml file
+                progress = min(1.0, max(0.0, (i - COURSE_START) / (COURSE_END - COURSE_START)))
+
+                current_size = int(INIT_SIZE + (FINAL_SIZE - INIT_SIZE) * progress)
+                dp = int(INIT_DP + (FINAL_DP - INIT_DP) * progress)
+                gamma_weight = INIT_GAMMA + (FINAL_GAMMA - INIT_GAMMA) * progress
+                m_targets = int(INIT_TARGETS + (FINAL_TARGETS - INIT_TARGETS) * progress)
+                n_obstacles = int(INIT_OBS + (FINAL_OBS - INIT_OBS) * progress)
+
+                # 边界惩罚权重：前 800 回合为 0，之后线性增加到 0.05
+                if i < 800:
+                    beta = 0.0
+                    explorer.bonus_weight = 0.0
+                else:
+                    beta = min(0.05, 0.05 * (i - 800) / 700)
+                    explorer.bonus_weight = 0.005 * min(1.0, (i - 500) / 1000)  # 最高 0.005
+
+                # 应用环境参数
+                env.update_size(current_size, current_size) if hasattr(env, 'update_size') else None
+                explorer.resize(current_size, current_size)
+                config['environment']['x_max'] = current_size
+                config['environment']['y_max'] = current_size
+                config['uav']['dp'] = dp
+                config['uav']['gamma'] = gamma_weight
+                config['environment']['m_targets'] = m_targets
+                config['environment']['n_obstacles'] = n_obstacles
+                config['uav']['beta'] = beta
+
+
+                # ------- PMI / cooperative 依旧按 schedule -------
+                if config.get("schedule") and i < config["schedule"]["stage1_end"]:
+                    config["pmi_weight"] = 0.0
+                    config["cooperative"] = 0.0
+                elif config.get("schedule") and i < config["schedule"]["stage2_end"]:
+                    config["pmi_weight"] = 0.005
+                    config["cooperative"] = 0.0
+                elif config.get("schedule") and i < config["schedule"]["stage3_end"]:
+                    config["pmi_weight"] = 0.02
+                    config["cooperative"] = 0.1
+                else:
+                    config["pmi_weight"] = 0.05
+                    config["cooperative"] = 0.3
+
+
+
                 env.reset(config=config)
 
-                # episode start
-                # transition_dict, reward, tt_return, bp_return, \
-                #     dtp_return = operate_epoch(config, env, agent, pmi, num_steps, cwriter_state, cwriter_prob)
-                #new TODO: 调整整体返回值
+                debug = False
                 transition_dict, reward, tt_return, bp_return, \
-                    dtp_return,op_return, average_targets, average_obstacles,max_targets,max_obstacles = operate_epoch(config, env, agent, pmi, num_steps)
+                    dtp_return,op_return, average_targets, average_obstacles,max_targets,max_obstacles = operate_epoch(config, env, agent, pmi, num_steps,explorer=explorer)
+
                 writer.add_scalar('reward', reward, i)
                 writer.add_scalar('target_tracking_return', tt_return, i)
                 writer.add_scalar('boundary_punishment', bp_return, i)
                 writer.add_scalar('duplicate_tracking_punishment', dtp_return, i)
                 writer.add_scalar('average_covered_targets', average_targets, i)
                 writer.add_scalar('max_covered_targets', max_targets, i)
-                #new
                 writer.add_scalar('obstacle_punishment', op_return, i)
                 writer.add_scalar('average_covered_obstacles', average_obstacles, i)
                 writer.add_scalar('max_covered_obstacles', max_obstacles, i)
 
-                # saving return lists
+
                 return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,average_targets, average_obstacles,max_targets,max_obstacles)
 
-                # sample from buffer，经验回访，添加经验 -》采集 -》更新网络
-                buffer.add(transition_dict)
-                # sample_dict = buffer.sample(sample_size)
-                sample_dict, indices, _ = buffer.sample(sample_size)
+                # ===================== 修复：双模式 =====================
+                if config['method'] != "MAPPO":
+                    buffer.add(transition_dict)
+                    sample_dict, indices, _ = buffer.sample(sample_size)
+                    actor_loss, critic_loss, td_errors = agent.update(sample_dict)
+                    buffer.update_priorities(indices, td_errors.abs().detach().cpu().numpy())
+                else:
+                    # ---------- 构建 MAPPO 需要的轨迹字典 ----------
+                    T = num_steps
+                    N = env.n_uav
+                    states = np.array(transition_dict['states']).reshape(T, N, 16)  # [T, N, 16]
+                    actions = np.array(transition_dict['actions']).reshape(T, N)  # [T, N]
+                    log_probs_old = np.array(transition_dict['log_probs']).reshape(T, N)  # [T, N]
+                    rewards = np.array(transition_dict['rewards']).reshape(T, N)  # [T, N]
+                    dones = np.zeros_like(actions)  # [T, N]，无终止标志
 
-                # update actor-critic network
-                actor_loss, critic_loss, td_errors = agent.update(sample_dict)
+                    trajectory = {
+                        'states': states,
+                        'actions': actions,
+                        'log_probs': log_probs_old,
+                        'rewards': rewards,
+                        'dones': dones
+                    }
+
+                    actor_loss, critic_loss = agent.update(trajectory)
+
+                    if pmi:
+                        train_data = torch.tensor(np.array(transition_dict['states']), dtype=torch.float32).to(
+                            agent.device)
+                        avg_pmi_loss = pmi.train_pmi(config, train_data, env.n_uav)
+                        writer.add_scalar('avg_pmi_loss', avg_pmi_loss, i)
+
+
                 writer.add_scalar('actor_loss', actor_loss, i)
                 writer.add_scalar('critic_loss', critic_loss, i)
 
-                # update buffer
-                buffer.update_priorities(indices, td_errors.abs().detach().cpu().numpy())
-
-                # update pmi network
-                if pmi:
-                    avg_pmi_loss = pmi.train_pmi(config, torch.tensor(np.array(sample_dict["states"])), env.n_uav)
-                    writer.add_scalar('avg_pmi_loss', avg_pmi_loss, i)
-
-                # save & print
                 if (i + 1) % frequency == 0:
-                    # print some information
                     if pmi:
                         pbar.set_postfix({'episode': '%d' % (i + 1),
                                           'return': '%.3f' % np.mean(return_value.return_list[-frequency:]),
@@ -366,7 +445,6 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                                           'actor loss': '%f' % actor_loss,
                                           'critic loss': '%f' % critic_loss})
 
-                    # save results and weights
                     draw_animation(config=config, env=env, num_steps=num_steps, ep_num=i)
                     agent.save(save_dir=config["save_dir"], epoch_i=i + 1)
                     if pmi:
@@ -375,81 +453,42 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                     env.save_covered_num(save_dir=config["save_dir"], epoch_i=i + 1)
                     env.save_obstacle_num(save_dir=config["save_dir"], epoch_i=i + 1)
 
-                # episode end
                 pbar.update(1)
 
     writer.close()
-
     return return_value.item()
 
 
 def evaluate(config, env, agent, pmi, num_steps):
-    """
-    评估训练好的模型
-    :param config: 配置
-    :param pmi: pmi network
-    :param num_steps: 每局进行的步数
-    :param env:
-    :param agent: # 因为所有的无人机共享权重训练, 所以共用一个agent
-    :return:
-    """
-    # initialize saving list
     return_value = ReturnValueOfTrain()
-
-    # reset environment from config yaml file
     env.reset(config=config)
-
-    # episode start
     transition_dict, reward, tt_return, bp_return, dtp_return,op_return,average_targets,average_obstacles, max_targets,max_obstacles = operate_epoch(config, env, agent, pmi, num_steps)
-
-    # saving return lists
     return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,average_targets,average_obstacles, max_targets,max_obstacles)
-
-    # save results and weights
     draw_animation(config=config, env=env, num_steps=num_steps, ep_num=0)
     env.save_position(save_dir=config["save_dir"], epoch_i=0)
     env.save_covered_num(save_dir=config["save_dir"], epoch_i=0)
-    #new
     env.save_obstacle_num(save_dir=config["save_dir"], epoch_i=0)
-
     return return_value.item()
 
-def run_epoch(config, pmi, env, num_steps):
 
-    """
-    一个轮次步骤 TODO 增加碰撞信息
-    :param config:
-    :param env:
-    :param num_steps:
-    :return:
-    """
+def run_epoch(config, pmi, env, num_steps):
     transition_dict = {'states': [], 'actions': [], 'next_states': [], 'rewards': []}
     episode_return = 0
     episode_target_tracking_return = 0
     episode_boundary_punishment_return = 0
     episode_duplicate_tracking_punishment_return = 0
-    #新增碰撞惩罚返回值和碰撞列表
     episode_obstacle_punishment_return = 0
     covered_obstacle_list = []
     covered_targets_list = []
 
     for _ in range(num_steps):
         action_list = []
-        # uav_tracking_status = [0] * len(env.uav_list)
-
-        # # each uav makes choices first
-        # for uav in env.uav_list:
-        #     action, target_index = uav.get_action_by_direction(env.target_list, env.uav_list, uav_tracking_status)  # TODO
-        #     uav_tracking_status[target_index] = 1
-        #     action_list.append(action)
-        #TODO: 先到这里
         for uav in env.uav_list:
-            action = uav.get_action_by_direction(env.target_list, env.uav_list)  # TODO
+            action = uav.get_action_by_direction(env.target_list, env.uav_list)
             action_list.append(action)
 
-        next_state_list, reward_list, covered_targets ,covered_obstacles= env.step(config, pmi, action_list)  # TODO
+        next_state_list, reward_list, covered_targets ,covered_obstacles= env.step(config, pmi, action_list)
 
-        # use action_list to update the environment
         transition_dict['actions'].extend(action_list)
         transition_dict['rewards'].extend(reward_list['rewards'])
         episode_return += sum(reward_list['rewards'])
@@ -457,48 +496,37 @@ def run_epoch(config, pmi, env, num_steps):
         episode_boundary_punishment_return += sum(reward_list['boundary_punishment'])
         episode_duplicate_tracking_punishment_return += sum(reward_list['duplicate_tracking_punishment'])
         covered_targets_list.append(covered_targets)
-
-        #new TODO: 新增碰撞更新队列
         episode_obstacle_punishment_return += sum(reward_list['obstacle_punishment'])
         covered_obstacle_list.append(covered_obstacles)
 
     average_covered_targets = np.mean(covered_targets_list)
     max_covered_targets = np.max(covered_targets_list)
-    #new 新增
     average_covered_obstacles = np.mean(covered_obstacle_list)
     max_covered_obstacles = np.max(covered_obstacle_list)
-
 
     return (transition_dict, episode_return, episode_target_tracking_return,
             episode_boundary_punishment_return, episode_duplicate_tracking_punishment_return,episode_obstacle_punishment_return,
             average_covered_targets,average_covered_obstacles, max_covered_targets,max_covered_obstacles)
 
+
 def run(config, env, pmi, num_steps):
-    """
-    执行文件
-    TODO 返回多加一个碰撞列表
-    :param config:
-    :param num_steps: 每局进行的步数
-    :param env:
-    :return: return_list
-    """
-    # initialize saving list
     return_value = ReturnValueOfTrain()
-
-    # reset environment from config yaml file
     env.reset(config=config)
-
-    # episode start TODO:
     transition_dict, reward, tt_return, bp_return, dtp_return, op_return,average_targets, average_obstacles,max_targets,max_obstacles = run_epoch(config, pmi, env, num_steps)
-
-    # saving return lists
     return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,average_targets, average_obstacles,max_targets,max_obstacles)
-
-    # save results and weights
     draw_animation(config=config, env=env, num_steps=num_steps, ep_num=0)
     env.save_position(save_dir=config["save_dir"], epoch_i=0)
     env.save_covered_num(save_dir=config["save_dir"], epoch_i=0)
-    #new
     env.save_obstacle_num(save_dir=config["save_dir"], epoch_i=0)
-
     return return_value.item()
+
+
+def compute_gae(rewards, values, next_values, gamma, gae_lambda):
+    advantages = []
+    advantage = 0.0
+    for t in reversed(range(len(rewards))):
+        delta = rewards[t] + gamma * next_values[t] - values[t]
+        advantage = delta + gamma * gae_lambda * advantage
+        advantages.insert(0, advantage)
+    returns = np.array(advantages) + np.array(values)
+    return advantages, returns

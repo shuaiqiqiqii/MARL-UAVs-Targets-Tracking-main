@@ -12,7 +12,7 @@ src/utils/__pycache__/draw_util.cpython-310.pyc
 
 src/__pycache__/train.cpython-310.pyc
 src/__pycache__/environment.cpython-310.pyc
-
+result/
 
 
 /.idea

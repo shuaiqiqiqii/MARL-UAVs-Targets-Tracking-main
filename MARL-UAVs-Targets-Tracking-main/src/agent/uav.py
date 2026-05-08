@@ -1,3 +1,4 @@
+import math
 import random
 import numpy as np
 from math import cos, sin, sqrt, exp, pi, e, atan2
@@ -52,6 +53,8 @@ class UAV:
         self.uav_communication = []  #通信范围内的队友信息
         #new
         self.obstacle_observation = []
+
+        self.target_tracking_steps = {}  # 字典，key为目标id，value为连续观测步数
 
         # reward
         self.raw_reward = 0
@@ -136,9 +139,11 @@ class UAV:
         :return: None
         """
         self.target_observation = []  # Reset observed targets
+        current_observed_ids = set()
         for target in targets_list:
             dist = self.__distance(target)
             if dist <= self.dp: #仅感知dp范围内的目标
+                current_observed_ids.add(id(target))
                 # add (x, y, vx, vy) information
                 if relative: #如果使用的是相对坐标，相应的应该使用相对速度进行感知
                     self.target_observation.append(((target.x - self.x) / self.dp,
@@ -150,6 +155,15 @@ class UAV:
                                                     target.y / self.dp,
                                                     cos(target.h) * target.v_max / self.v_max,
                                                     sin(target.h) * target.v_max / self.v_max))
+            # 更新连续观测步数
+        for t_id in list(self.target_tracking_steps.keys()):
+            if t_id in current_observed_ids:
+                self.target_tracking_steps[t_id] += 1
+            else:
+                del self.target_tracking_steps[t_id]  # 一旦丢失，重置
+        for t_id in current_observed_ids:
+            if t_id not in self.target_tracking_steps:
+                self.target_tracking_steps[t_id] = 1
 
     def observe_obstacle(self, obstacle_list: List['OBSTACLE'], relative = True):
         """
@@ -268,20 +282,36 @@ class UAV:
         # using weighted mean method:
         return self.__get_local_state_by_weighted_mean()
 
-    def __calculate_multi_target_tracking_reward(self, target_list) -> float:
-        """
-        追踪奖励计算，距离目标越近奖励越高
-        calculate multi target tracking reward
-        :return: scalar [1, 2)
-        """
+    # def __calculate_multi_target_tracking_reward(self, target_list) -> float:
+    #     """
+    #      原先的追踪奖励函数，缺乏持续的奖励
+    #     追踪奖励计算，距离目标越近奖励越高
+    #     calculate multi target tracking reward
+    #     :return: scalar [1, 2)
+    #     """
+    #     track_reward = 0
+    #     for target  in target_list:
+    #         if target != self:
+    #             distance = self.__distance(target)
+    #             if distance <= self.dp:
+    #                 reward = 1 + (self.dp - distance) / self.dp
+    #                 # track_reward += clip_and_normalize(reward, 1, 2, 0)
+    #                 track_reward += reward  # 没有clip, 在调用时外部clip
+    #     return track_reward
+    def __calculate_multi_target_tracking_reward(self, target_list):
         track_reward = 0
-        for target  in target_list:
-            if target != self:
-                distance = self.__distance(target)
-                if distance <= self.dp:
-                    reward = 1 + (self.dp - distance) / self.dp
-                    # track_reward += clip_and_normalize(reward, 1, 2, 0)
-                    track_reward += reward  # 没有clip, 在调用时外部clip
+        for target in target_list:
+            dist = self.__distance(target)
+            if dist <= self.dp:
+                base_reward = 1 + (self.dp - dist) / self.dp
+                # 额外连续性奖励：连续跟踪超过5步后，每步额外+0.1
+                continuous_bonus = 0.0
+                t_id = id(target)
+                if t_id in self.target_tracking_steps:
+                    steps = self.target_tracking_steps[t_id]
+                    if steps > 5:
+                        continuous_bonus = 0.1 * min(steps - 5, 20) / 20  # 上限1.0
+                track_reward += base_reward + continuous_bonus
         return track_reward
 
     def __calculate_duplicate_tracking_punishment(self, uav_list: List['UAV'], radio=2) -> float:
@@ -303,25 +333,45 @@ class UAV:
         return total_punishment
 
     def __calculate_boundary_punishment(self, x_max: float, y_max: float) -> float:
-        """
-        计算越界惩罚[0~-0.5]
-        :param x_max: border of the map at x-axis, scalar
-        :param y_max: border of the map at y-axis, scalar
-        :return:
-        """
-        x_to_0 = self.x - 0
+        # 安全区域扩展：距离边界 min_distance 以内才开始警告
+        min_distance = 50.0  # 比 dp 小得多，释放探索空间
+        x_to_0 = self.x
         x_to_max = x_max - self.x
-        y_to_0 = self.y - 0
+        y_to_0 = self.y
         y_to_max = y_max - self.y
         d_bdr = min(x_to_0, x_to_max, y_to_0, y_to_max)
-        if 0 <= self.x <= x_max and 0 <= self.y <= y_max:
-            if d_bdr < self.dp:
-                boundary_punishment = -0.5 * (self.dp - d_bdr) / self.dp
-            else:
-                boundary_punishment = 0
+
+        if d_bdr < min_distance:
+            # 接近边界：用平方函数平滑惩罚，最大惩罚 -0.5
+            penalty = -0.5 * ((min_distance - d_bdr) / min_distance) ** 2
         else:
-            boundary_punishment = -1/2
-        return boundary_punishment  # 没有clip, 在调用时外部clip
+            penalty = 0.0
+        return penalty
+
+
+    # def __calculate_fovea_bonus(self, target_list):
+    #         """
+    #         计算视野中心奖励：目标越靠近无人机正前方，奖励越高。
+    #         """
+    #         bonus = 0.0
+    #         for target in target_list:
+    #             if self.__distance(target) > self.dp:
+    #                 continue  # 不在感知范围内，无奖励
+    #             # 计算目标相对于无人机的方位角
+    #             dx = target.x - self.x
+    #             dy = target.y - self.y
+    #             angle_to_target = math.atan2(dy, dx)
+    #             # 计算绝对角度差，并归一化到 [0, pi]
+    #             angle_diff = abs(angle_to_target - self.h)
+    #             angle_diff = (angle_diff + math.pi) % (2 * math.pi) - math.pi  # 保证在 [-pi, pi]
+    #             angle_diff = abs(angle_diff)
+    #             # 视野中心奖励：角度差小于 30°（pi/6）时给分，线性衰减，最大 0.5
+    #             max_angle = math.pi / 6  # 30度
+    #             if angle_diff <= max_angle:
+    #                 bonus += 0.5 * (1 - angle_diff / max_angle)
+    #         return bonus
+
+
         # return clip_and_normalize(boundary_punishment, -1/2, 0, -1)
 
     #新增
@@ -371,6 +421,7 @@ class UAV:
         punishment = self.__calculate_duplicate_tracking_punishment(uav_list)
         #新增惩罚
         obstacle_punishment = self.__calculate_obstacle_punishment(obstacle_list)
+        # alloc = self.__calculate_target_allocation_punishment(target__list, uav_list)
 
         return reward, boundary_punishment, punishment,obstacle_punishment
 
@@ -423,6 +474,24 @@ class UAV:
         reward = (1 - a) * self.raw_reward + a * sum(neighbor_rewards) / len(neighbor_rewards) \
             if len(neighbor_rewards) else 0
         return reward
+    def __calculate_target_allocation_punishment(self, target_list, uav_list):
+        """
+        对于每个目标，如果有多架无人机同时观测到它，则对观测该目标的无人机施加惩罚（越集中惩罚越大）
+        不好用
+        """
+        punishment = 0.0
+        for target in target_list:
+            # 找到所有能看到该目标的无人机（包括自己）
+            observers = []
+            for uav in uav_list:
+                if uav.distance(uav.x, uav.y, target.x, target.y) <= uav.dp:
+                    observers.append(uav)
+            n_obs = len(observers)
+            if n_obs > 1 and self in observers:
+                # 惩罚幅度：与观测者数量成正比，但最多惩罚到 -0.5
+                punishment -= min(0.5, (n_obs - 1) * 0.15)
+        return max(punishment, -1.0)
+
 
     def calculate_cooperative_reward(self, uav_list: List['UAV'], pmi_net=None, a=0.5) -> float:
         """
@@ -436,6 +505,8 @@ class UAV:
             return self.__calculate_cooperative_reward_by_pmi(uav_list, pmi_net, a)
         else:
             return self.__calculate_cooperative_reward_by_mean(uav_list, a)
+
+
 
     def get_action_by_direction(self, target_list, uav_list):
         """

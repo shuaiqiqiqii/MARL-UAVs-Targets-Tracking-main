@@ -119,6 +119,7 @@ class Environment:
         self.covered_target_num = []
 
 
+
         #新增
         # 初始化障碍物列表 （随机位置、随机航向角、随机转向角）
         self.obstacle_list = [OBSTACLE(random.uniform(0, self.x_max),
@@ -149,6 +150,7 @@ class Environment:
         #              dp=config["uav"]["dp"],
         #              dt=config["uav"]["dt"],
         #              init_x=config['environment']['x_max']/2, init_y=config['environment']['y_max']/2)
+        self.n_obstacles = config['environment']['n_obstacles']
         self.__reset(t_v_max=config["target"]["v_max"],
                      t_h_max=pi / float(config["target"]["h_max"]),
                      u_v_max=config["uav"]["v_max"],
@@ -338,15 +340,17 @@ class Environment:
             # 奖励裁剪+归一化（避免极端值影响训练）
             #追踪奖励：0~2×目标数 → 归一化到0~1
             target_tracking_reward = clip_and_normalize(target_tracking_reward,
-                                                        0, 2 * config['environment']['m_targets'], 0)
+                                                        0, 4 * config['environment']['m_targets'], 0)
             #重复追踪惩罚：-e/2×无人机数~0 → 归一化到-1~0
             duplicate_tracking_punishment = clip_and_normalize(duplicate_tracking_punishment,
                                                                -e / 2 * config['environment']['n_uav'], 0, -1)
             #越界惩罚：-0.5~0 → 归一化到-1~0
-            boundary_punishment = clip_and_normalize(boundary_punishment, -1/2, 0, -1)
+            boundary_punishment = clip_and_normalize(boundary_punishment, -2.0, 0, -1)
 
             #新增 碰撞惩罚
-            obstacle_punishment = clip_and_normalize(obstacle_punishment, -1, 0, -1)
+            obstacle_punishment = clip_and_normalize(obstacle_punishment, -2.0, 0, -1)
+
+
 
             # 保存奖励和惩罚
             target_tracking_rewards.append(target_tracking_reward)
@@ -371,6 +375,7 @@ class Environment:
             uav.reward = clip_and_normalize(reward, -1, 1)
             rewards.append(uav.reward)
         return rewards, target_tracking_rewards, boundary_punishments, duplicate_tracking_punishments ,obstacle_punishments
+
 
     def save_position(self, save_dir, epoch_i):
         """
@@ -447,3 +452,13 @@ class Environment:
                     covered_obstacle_num += 1
                     break
         return covered_obstacle_num
+
+    def update_size(self, x_max, y_max):
+        """
+        随着训练回合数，不断扩大可搜索区域
+        :param x_max:
+        :param y_max:
+        :return:
+        """
+        self.x_max = x_max
+        self.y_max = y_max
