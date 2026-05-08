@@ -143,6 +143,6 @@ if __name__ == "__main__":
     parser.add_argument("-a", "--actor_path", type=str, default=None)
     parser.add_argument("-c", "--critic_path", type=str, default=None)
     parser.add_argument("-p", "--pmi_path", type=str, default=None)
-    parser.add_argument("-m", "--method", default="MAAC-R", choices=["MAAC", "MAAC-R", "MAAC-G", "C-METHOD", "MAPPO"])
+    parser.add_argument("-m", "--method", default="MAPPO", choices=["MAAC", "MAAC-R", "MAAC-G", "C-METHOD", "MAPPO"])
     main_args = parser.parse_args()
     main(main_args)

@@ -349,27 +349,6 @@ class UAV:
         return penalty
 
 
-    # def __calculate_fovea_bonus(self, target_list):
-    #         """
-    #         计算视野中心奖励：目标越靠近无人机正前方，奖励越高。
-    #         """
-    #         bonus = 0.0
-    #         for target in target_list:
-    #             if self.__distance(target) > self.dp:
-    #                 continue  # 不在感知范围内，无奖励
-    #             # 计算目标相对于无人机的方位角
-    #             dx = target.x - self.x
-    #             dy = target.y - self.y
-    #             angle_to_target = math.atan2(dy, dx)
-    #             # 计算绝对角度差，并归一化到 [0, pi]
-    #             angle_diff = abs(angle_to_target - self.h)
-    #             angle_diff = (angle_diff + math.pi) % (2 * math.pi) - math.pi  # 保证在 [-pi, pi]
-    #             angle_diff = abs(angle_diff)
-    #             # 视野中心奖励：角度差小于 30°（pi/6）时给分，线性衰减，最大 0.5
-    #             max_angle = math.pi / 6  # 30度
-    #             if angle_diff <= max_angle:
-    #                 bonus += 0.5 * (1 - angle_diff / max_angle)
-    #         return bonus
 
 
         # return clip_and_normalize(boundary_punishment, -1/2, 0, -1)
@@ -422,8 +401,8 @@ class UAV:
         #新增惩罚
         obstacle_punishment = self.__calculate_obstacle_punishment(obstacle_list)
         # alloc = self.__calculate_target_allocation_punishment(target__list, uav_list)
-
-        return reward, boundary_punishment, punishment,obstacle_punishment
+        fovea = self.__calculate_fovea_bonus(target__list)  # 新增
+        return reward, boundary_punishment, punishment,obstacle_punishment,fovea
 
     def __calculate_cooperative_reward_by_pmi(self, uav_list: List['UAV'], pmi_net: "PMINetwork", a) -> float:
         """
@@ -491,6 +470,28 @@ class UAV:
                 # 惩罚幅度：与观测者数量成正比，但最多惩罚到 -0.5
                 punishment -= min(0.5, (n_obs - 1) * 0.15)
         return max(punishment, -1.0)
+
+    def __calculate_fovea_bonus(self, target_list):
+        """
+        计算视野中心奖励：目标越靠近无人机正前方，奖励越高。
+        """
+        bonus = 0.0
+        for target in target_list:
+            if self.__distance(target) > self.dp:
+                continue  # 不在感知范围内，无奖励
+            # 计算目标相对于无人机的方位角
+            dx = target.x - self.x
+            dy = target.y - self.y
+            angle_to_target = math.atan2(dy, dx)
+            # 计算绝对角度差，并归一化到 [0, pi]
+            angle_diff = abs(angle_to_target - self.h)
+            angle_diff = (angle_diff + math.pi) % (2 * math.pi) - math.pi  # 保证在 [-pi, pi]
+            angle_diff = abs(angle_diff)
+            # 视野中心奖励：角度差小于 30°（pi/6）时给分，线性衰减，最大 0.5
+            max_angle = math.pi / 6  # 30度
+            if angle_diff <= max_angle:
+                bonus += 0.5 * (1 - angle_diff / max_angle)
+        return bonus
 
 
     def calculate_cooperative_reward(self, uav_list: List['UAV'], pmi_net=None, a=0.5) -> float:

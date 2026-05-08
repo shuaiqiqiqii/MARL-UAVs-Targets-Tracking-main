@@ -9,24 +9,26 @@ gpus: 1
 seed: 42
 cooperative: 0.3
 environment:
-  n_uav: 5
-  m_targets: 5
-  n_obstacles: 3
-  x_max: 2000
-  y_max: 2000
+  n_uav: 3
+  m_targets: 7
+  n_obstacles: 1
+  x_max: 1000
+  y_max: 1000
   na: 12  # 离散化动作空间维数
 
 uav:
   dt: 1
-  v_max: 20
+  v_max: 30
   h_max: 6  # 表示 pi / 6
   dc: 500
-  dp: 200
+  dp: 500
   do: 300
-  alpha: 0.6
-  beta: 0.2
-  gamma: 0.2
-  omega: 0.2 #新增碰撞惩罚系数
+  alpha: 1.4 #目标追踪奖励权重（前期为了快速学会追踪应该设置到1.2-1.5，后续可以逐渐降低到0.8-1.0 让uav学会合作以及躲避障碍）
+  beta: 0.02 #边界惩罚权重，初期可以完全关闭让无人机专注追踪，后继逐渐提升至0.01-0.05
+  gamma: 0.05 #重复追踪惩罚，越大越会主动分散避免扎堆，初始值可以设置小一点，专注追踪，后续应当逐渐提升0.01-0.05
+  omega: 0.05 #新增碰撞惩罚系数 越大避免碰撞的优先级越高，应当设置为0.05-0.2
+#  gamma_alloc: 0.2 #新增目标分配惩罚权重
+  fovea_weight: 0.3
 
 target:
   v_max: 5
@@ -37,14 +39,30 @@ obstacle:
   h_max: 6
 
 actor_critic:
-  buffer_size: 1000000
-  sample_size: 0  # 表示每次采样的大小为每个epoch的step数
-  actor_lr: 1e-4
-  critic_lr: 1e-4
   hidden_dim: 128
-  gamma: 0.95
+  actor_lr: 0.0003
+  critic_lr: 0.0003
+  gamma: 0.95 #ac网络的折扣因子，越接近1越看 重长远汇报，通常设置为0.95-0.99
+  gae_lambda: 0.95 #默认推荐值，无需修改
+  clip_epsilon: 0.2
+  update_epochs: 10
 
 pmi:
   hidden_dim: 64 #在pmi网络中负责通信特征提取
   b2_size: 1000 #随机采样1000个无人机对
   batch_size: 32 #每次寻来你32个无人机对样本
+  pmi_weight: 0.00
+  cooperative: 0.0
+
+schedule:
+  # ---- 阶段 1：纯基础训练 ----
+  stage1_end: 1000            # 前 500 回合只用环境奖励+小范围内搜索
+
+  # ---- 阶段 2：开启 PMI 内在奖励（极低权重） ----
+  stage2_end: 1500            # 500-800 回合加入 pmi_weight=0.01，同时扩大搜索范围（防止目标密集导致重复追踪惩罚过大）
+
+  # ---- 阶段 3：提升内在奖励 ----
+  stage3_end: 2000            # 800-1100 回合 pmi_weight=0.05，继续增大地图区域
+
+  # ---- 阶段 4：加入协作加权 ----
+  # 600 回合以后 pmi_weight=0.1, cooperative=0.3
