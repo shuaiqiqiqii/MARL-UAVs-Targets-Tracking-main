@@ -490,8 +490,8 @@ class UAV:
             # 视野中心奖励：角度差小于 30°（pi/6）时给分，线性衰减，最大 0.5
             max_angle = math.pi / 6  # 30度
             if angle_diff <= max_angle:
-                bonus += 0.5 * (1 - angle_diff / max_angle)
-        return bonus
+                bonus += min(0.5, 0.5 * (1 - angle_diff / max_angle))
+        return  min(bonus, 0.5)
 
 
     def calculate_cooperative_reward(self, uav_list: List['UAV'], pmi_net=None, a=0.5) -> float:

@@ -344,15 +344,16 @@ class Environment:
             # 奖励裁剪+归一化（避免极端值影响训练）
             #追踪奖励：0~2×目标数 → 归一化到0~1
             target_tracking_reward = clip_and_normalize(target_tracking_reward,
-                                                        0, 4 * config['environment']['m_targets'], 0)
+                                                        0, 4 * config['environment']['m_targets'], 0, name="track")
             #重复追踪惩罚：-e/2×无人机数~0 → 归一化到-1~0
             duplicate_tracking_punishment = clip_and_normalize(duplicate_tracking_punishment,
-                                                               -e / 2 * config['environment']['n_uav'], 0, -1)
+                                                               -e / 2 * config['environment']['n_uav'], 0, -1,name="duplicate")
             #越界惩罚：-0.5~0 → 归一化到-1~0
-            boundary_punishment = clip_and_normalize(boundary_punishment, -2.0, 0, -1)
+            boundary_punishment = clip_and_normalize(boundary_punishment, -2.0, 0, -1,name="boundary")
 
             #新增 碰撞惩罚
-            obstacle_punishment = clip_and_normalize(obstacle_punishment, -2.0, 0, -1)
+            obstacle_punishment = clip_and_normalize(obstacle_punishment, -2.0, 0, -1,name="obstacle")
+            fovea_bonus = clip_and_normalize(fovea_bonus, 0, 0.5, 0, name="fovea")
 
 
 

@@ -51,7 +51,7 @@ def save_csv(config, return_list):
 
 
 
-def clip_and_normalize(val, floor, ceil, choice=1):
+def clip_and_normalize(val, floor, ceil, choice=1, name=""):
     """
     裁剪并归一化
     :param val: 原始值
@@ -63,7 +63,7 @@ def clip_and_normalize(val, floor, ceil, choice=1):
     if val < floor or val > ceil:
         val = max(val, floor)
         val = min(val, ceil)
-        print("overstep in clip.")
+        print(f"overstep in clip. [{name}] val={val:.3f}, range=[{floor},{ceil}]")
     val = np.clip(val, floor, ceil)
     mid = (floor + ceil) / 2
     if choice == -1:

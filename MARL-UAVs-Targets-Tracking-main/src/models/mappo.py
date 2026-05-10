@@ -103,7 +103,7 @@ class MAPPO:
             actor_loss = -torch.min(surr1, surr2).mean()
 
             # Critic loss (MSE with detached target)
-            td_target = (advantages_flat + old_values.view(-1, 1)).detach()  # 使用旧值作为目标
+            td_target = (advantages_flat + old_values.view(-1, 1)).detach().squeeze(-1)  # 使用旧值作为目标
             critic_loss = F.mse_loss(values, td_target)
 
             # 梯度更新

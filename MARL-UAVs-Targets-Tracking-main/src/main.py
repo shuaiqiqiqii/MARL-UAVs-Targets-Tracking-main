@@ -52,12 +52,8 @@ def main(args):
     pmi = None
 
     if args.method == "MAPPO":
-        pmi = PMINetwork(
-            hidden_dim=config["pmi"]["hidden_dim"],
-            b2_size=config["pmi"]["b2_size"]
-        )
-        if args.pmi_path is not None:
-            pmi.load(args.pmi_path)
+        pmi = None
+
 
         agent = MAPPO(
             state_dim=16,  # 直接使用 16 维
@@ -137,8 +133,8 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("--phase", type=str, default="train", choices=["train", "evaluate", "run"])
-    parser.add_argument("-e", "--num_episodes", type=int, default=5000)
-    parser.add_argument("-s", "--num_steps", type=int, default=200)
+    parser.add_argument("-e", "--num_episodes", type=int, default=6000)
+    parser.add_argument("-s", "--num_steps", type=int, default=300)
     parser.add_argument("-f", "--frequency", type=int, default=100)
     parser.add_argument("-a", "--actor_path", type=str, default=None)
     parser.add_argument("-c", "--critic_path", type=str, default=None)

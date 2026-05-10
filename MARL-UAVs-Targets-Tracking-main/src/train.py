@@ -1,8 +1,13 @@
+import copy
 import os.path
 import csv
+
+from matplotlib import pyplot as plt
 from tqdm import tqdm
 import numpy as np
 import torch
+
+from src.environment import Environment
 from utils.draw_util import draw_animation
 from torch.utils.tensorboard import SummaryWriter
 import random
@@ -44,13 +49,15 @@ class ReturnValueOfTrain:
             'max_covered_targets_list': self.max_covered_targets_list,
             'obstacle_punishment_return_list': self.obstacle_punishment_return_list,
             'average_covered_obstacles_list': self.average_covered_obstacles_list,
-            'max_covered_obstacles_list': self.max_covered_obstacles_list
+            'max_covered_obstacles_list': self.max_covered_obstacles_list,
+            'fovea_bonus_return_list': self.fovea_bonus_return_list
         }
         return value_dict
 
     def save_epoch(self, reward, tt_return, bp_return, dtp_return, op_return,fovea_bonus_reward,average_targets,average_obstacle, max_targets,max_obstacle):
         """
         每轮训练后，保存当前轮次的所有指标
+        :param fovea_bonus_reward:
         :param max_obstacle: 一个轮次的最大碰撞数量
         :param average_obstacle: 平均碰撞数
         :param op_return: 碰撞惩罚返回值
@@ -232,12 +239,12 @@ def operate_epoch(config, env, agent, pmi, num_steps, cwriter_state=None, cwrite
 
         # 使用 PMI 计算同一时间步所有无人机的内在奖励
         intrinsic_rewards = np.zeros(env.n_uav)
-        if pmi is not None:
-            with torch.no_grad():
-                tensor_states = torch.FloatTensor(np.array(all_states)).to(agent.device)
-                pmi_vals = pmi(tensor_states).squeeze()  # [N]
-                # 简单内在奖励：PMI 值本身（可加权重）
-                intrinsic_rewards = pmi_vals.cpu().numpy() * config.get("pmi_weight", 0.1)
+        # if pmi is not None:
+        #     with torch.no_grad():
+        #         tensor_states = torch.FloatTensor(np.array(all_states)).to(agent.device)
+        #         pmi_vals = pmi(tensor_states).squeeze()  # [N]
+        #         # 简单内在奖励：PMI 值本身（可加权重）
+        #         intrinsic_rewards = pmi_vals.cpu().numpy() * config.get("pmi_weight", 0.1)
 
         for idx, uav in enumerate(env.uav_list):
             state_np = all_states[idx]  # 保持 16 维，不拼接
@@ -308,18 +315,45 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
     save_dir = os.path.join(config["save_dir"], "logs")
     writer = SummaryWriter(log_dir=save_dir)
     return_value = ReturnValueOfTrain()
-    INIT_SIZE, FINAL_SIZE = 1000, 2000 #地图的初始大小和最终大小
-    INIT_DP, FINAL_DP = 500, 300 #探索范围的初始大小和最终大小
-    INIT_GAMMA, FINAL_GAMMA = 0.05, 0.15  # 重复惩罚权重
-    INIT_TARGETS, FINAL_TARGETS = 7, 5 #目标数量
+    INIT_SIZE, FINAL_SIZE = 1000, 1500 #地图的初始大小和最终大小
+    INIT_DP, FINAL_DP = 500, 400 #探索范围的初始大小和最终大小
+    INIT_GAMMA, FINAL_GAMMA = 0.05, 0.08  # 重复惩罚权重 原先是0.15
+    INIT_TARGETS, FINAL_TARGETS = 7, 6 #目标数量
     INIT_OBS, FINAL_OBS = 1, 3  #障碍数量
+    last_progress = 0.0
+    performance_window = []
 
 
 
     # 课程开始 / 结束的回合
-    COURSE_START = 0
-    COURSE_END = 2000  # 1500回合后达到最终难度
+    COURSE_START = 1000
+    COURSE_END = 2500  # 4000回合后达到最终难度
     explorer = GridExplorationBonus(INIT_SIZE, INIT_SIZE, grid_size=80, bonus_weight=0.00)
+
+    eval_config = copy.deepcopy(config)  # 浅拷贝基础配置
+    eval_config['environment']['x_max'] = 1500 #最终测试的地图大小
+    eval_config['environment']['y_max'] = 1500
+    eval_config['uav']['dp'] = 400 #探测距离
+    eval_config['environment']['m_targets'] = 6
+    eval_config['environment']['n_obstacles'] = 3
+    eval_config['uav']['gamma'] = 0.08  # 重复惩罚权重也固定
+    eval_config['uav']['alpha'] = 1.4
+    eval_config['uav']['beta'] = 0.05
+    eval_config['uav']['omega'] = 0.05
+    eval_config['uav']['fovea_weight'] = 0.3
+    # 评估时关闭 PMI 和协作，只测基础追踪能力
+    eval_config['pmi_weight'] = 0.00
+    eval_config['cooperative'] = 0.0
+    # 评估时不需要 schedule
+
+    eval_interval = 100 #每100回合执行一次测试
+    eval_records = {
+        'episodes': [],
+        'return': [],
+        'tt_return': [],
+        'avg_targets': []
+    }
+
     # ===================== 修复：MAPPO不创建回放池 =====================
     buffer = None
     sample_size = 0
@@ -338,7 +372,19 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
 
         with tqdm(total=num_episodes, desc='Episodes') as pbar:
             for i in range(num_episodes):
-                progress = min(1.0, max(0.0, (i - COURSE_START) / (COURSE_END - COURSE_START)))
+
+
+                if i < COURSE_START:
+                    progress = 0.0
+                else:
+                    progress = min(1.0, (i - COURSE_START) / (COURSE_END - COURSE_START))
+
+                    avg_track = np.mean(performance_window[-50:]) if len(performance_window) >= 100 else 1.0
+                    if avg_track < 0.15 and i > 1200:
+                        progress = last_progress
+                    else:
+                        last_progress = progress
+                # progress = min(1.0, max(0.0, (i - COURSE_START) / (COURSE_END - COURSE_START)))
 
                 current_size = int(INIT_SIZE + (FINAL_SIZE - INIT_SIZE) * progress)
                 dp = int(INIT_DP + (FINAL_DP - INIT_DP) * progress)
@@ -347,11 +393,11 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                 n_obstacles = int(INIT_OBS + (FINAL_OBS - INIT_OBS) * progress)
 
                 # 边界惩罚权重：前 800 回合为 0，之后线性增加到 0.05
-                if i < 800:
+                if i < 1200:
                     beta = 0.0
                     explorer.bonus_weight = 0.0
                 else:
-                    beta = min(0.05, 0.05 * (i - 800) / 700)
+                    beta = min(0.05, 0.05 * (i - 1200) / 800)
                     explorer.bonus_weight = 0.005 * min(1.0, (i - 500) / 1000)  # 最高 0.005
 
                 # 应用环境参数
@@ -366,19 +412,87 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                 config['uav']['beta'] = beta
 
 
-                # ------- PMI / cooperative 依旧按 schedule -------
-                if  i < config["schedule"]["stage1_end"]:
-                    config["pmi_weight"] = 0.0
-                    config["cooperative"] = 0.0
-                elif i < config["schedule"]["stage2_end"]:
-                    config["pmi_weight"] = 0.005
-                    config["cooperative"] = 0.0
-                elif  i < config["schedule"]["stage3_end"]:
-                    config["pmi_weight"] = 0.02
-                    config["cooperative"] = 0.1
-                else:
-                    config["pmi_weight"] = 0.05
-                    config["cooperative"] = 0.3
+                # # ------- PMI / cooperative 依旧按 schedule -------
+                # if  i < config["schedule"]["stage1_end"]:
+                #     config["pmi_weight"] = 0.0
+                #     config["cooperative"] = 0.0
+                # elif i < config["schedule"]["stage2_end"]:
+                #     config["pmi_weight"] = 0.005
+                #     config["cooperative"] = 0.0
+                # elif  i < config["schedule"]["stage3_end"]:
+                #     config["pmi_weight"] = 0.02
+                #     config["cooperative"] = 0.1
+                # else:
+                #     config["pmi_weight"] = 0.05
+                #     config["cooperative"] = 0.3
+
+                if i % eval_interval == 0 and i > 0:  # 跳过第0回合，节省时间
+                    agent.actor.eval()  # 切换评估模式（如有 BN/Dropout）
+                    agent.critic.eval()
+                    # eval_result = evaluate_standard(eval_config, agent, num_steps=100)
+                    #将最近三局的奖励取平均值，对评估环境多次采样取平均，以降低波动
+                    all_rewards = []
+                    all_tt = []
+                    all_bp = []
+                    all_dtp = []
+                    all_op = []
+                    all_fovea = []
+                    all_avg_targets = []
+                    for _ in range(3):
+                        res = evaluate_standard(eval_config, agent, num_steps=100)
+                        all_rewards.append(res['reward'])
+                        all_tt.append(res['tt_return'])
+                        all_bp.append(res['bp_return'])
+                        all_dtp.append(res['dtp_return'])
+                        all_op.append(res['op_return'])
+                        all_fovea.append(res['fovea_return'])
+                        all_avg_targets.append(res['avg_covered_targets'])
+
+                    eval_result = {
+                        'reward': np.mean(all_rewards),
+                        'tt_return': np.mean(all_tt),
+                        'bp_return': np.mean(all_bp),
+                        'dtp_return': np.mean(all_dtp),
+                        'op_return': np.mean(all_op),
+                        'fovea_return': np.mean(all_fovea),
+                        'avg_covered_targets': np.mean(all_avg_targets)
+                    }
+                    agent.actor.train()
+                    agent.critic.train()
+                    # 记录结果
+                    eval_records['episodes'].append(i)
+                    eval_records['return'].append(eval_result['reward'])
+                    eval_records['tt_return'].append(eval_result['tt_return'])
+                    eval_records['avg_targets'].append(eval_result['avg_covered_targets'])
+                    # 打印详细分量
+                    print(f"=== Eval at Episode {i} ===")
+                    print(f"  Eval Total Reward:   {eval_result['reward']:.3f}")
+                    print(f"  Eval Tracking Reward:{eval_result['tt_return']:.3f}")
+                    print(f"  Eval Boundary Punish: {eval_result['bp_return']:.3f}")
+                    print(f"  Eval Duplicate Punish:{eval_result['dtp_return']:.3f}")
+                    print(f"  Eval Obstacle Punish: {eval_result['op_return']:.3f}")
+                    print(f"  Eval Fovea Bonus:     {eval_result['fovea_return']:.3f}")
+                    print(f"  Eval Avg Cov. Targets:{eval_result['avg_covered_targets']:.2f}")
+
+
+
+
+
+                    # 写入 TensorBoard
+                    writer.add_scalar('eval/return', eval_result['reward'], i)
+                    writer.add_scalar('eval/tt_return', eval_result['tt_return'], i)
+                    writer.add_scalar('eval/avg_covered_targets', eval_result['avg_covered_targets'], i)
+
+                    print(f"--- Episode {i} ---")
+                    print(f"  Train Total Reward: {reward:.3f}")
+                    print(f"  Tracking Reward:    {tt_return:.3f}")
+                    print(f"  Boundary Punishment: {bp_return:.3f}")
+                    print(f"  Duplicate Tracking:  {dtp_return:.3f}")
+                    print(f"  Obstacle Punishment: {op_return:.3f}")
+                    print(f"  Fovea Bonus:         {fovea_bonus:.3f}")
+                    print(f"  Avg Covered Targets: {average_targets:.2f}")
+
+
 
 
 
@@ -387,6 +501,9 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                 debug = False
                 transition_dict, reward, tt_return, bp_return, \
                     dtp_return,op_return, fovea_bonus,average_targets, average_obstacles,max_targets,max_obstacles = operate_epoch(config, env, agent, pmi, num_steps,explorer=explorer)
+                performance_window.append(tt_return)
+                if len(performance_window) > 200:  # 保留最近200回合
+                    performance_window.pop(0)
 
                 writer.add_scalar('reward', reward, i)
                 writer.add_scalar('target_tracking_return', tt_return, i)
@@ -428,11 +545,11 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
 
                     actor_loss, critic_loss = agent.update(trajectory)
 
-                    if pmi:
-                        train_data = torch.tensor(np.array(transition_dict['states']), dtype=torch.float32).to(
-                            agent.device)
-                        avg_pmi_loss = pmi.train_pmi(config, train_data, env.n_uav)
-                        writer.add_scalar('avg_pmi_loss', avg_pmi_loss, i)
+                    # if pmi:
+                    #     train_data = torch.tensor(np.array(transition_dict['states']), dtype=torch.float32).to(
+                    #         agent.device)
+                    #     avg_pmi_loss = pmi.train_pmi(config, train_data, env.n_uav)
+                    #     writer.add_scalar('avg_pmi_loss', avg_pmi_loss, i)
 
 
                 writer.add_scalar('actor_loss', actor_loss, i)
@@ -443,18 +560,18 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                         pbar.set_postfix({'episode': '%d' % (i + 1),
                                           'return': '%.3f' % np.mean(return_value.return_list[-frequency:]),
                                           'actor loss': '%f' % actor_loss,
-                                          'critic loss': '%f' % critic_loss,
-                                          'avg pmi loss': '%f' % avg_pmi_loss})
+                                          'critic loss': '%f' % critic_loss})
+                                          # 'avg pmi loss': '%f' % avg_pmi_loss})
                     else:
                         pbar.set_postfix({'episode': '%d' % (i + 1),
                                           'return': '%.3f' % np.mean(return_value.return_list[-frequency:]),
                                           'actor loss': '%f' % actor_loss,
                                           'critic loss': '%f' % critic_loss})
 
-                    draw_animation(config=config, env=env, num_steps=num_steps, ep_num=i)
+                    # draw_animation(config=config, env=env, num_steps=num_steps, ep_num=i)
                     agent.save(save_dir=config["save_dir"], epoch_i=i + 1)
-                    if pmi:
-                        pmi.save(save_dir=config["save_dir"], epoch_i=i + 1)
+                    # if pmi:
+                    #     pmi.save(save_dir=config["save_dir"], epoch_i=i + 1)
                     env.save_position(save_dir=config["save_dir"], epoch_i=i + 1)
                     env.save_covered_num(save_dir=config["save_dir"], epoch_i=i + 1)
                     env.save_obstacle_num(save_dir=config["save_dir"], epoch_i=i + 1)
@@ -462,19 +579,67 @@ def train(config, env, agent, pmi, num_episodes, num_steps, frequency):
                 pbar.update(1)
 
     writer.close()
+    plt.figure(figsize=(8, 5))
+    plt.plot(eval_records['episodes'], eval_records['return'], 'o-', label='Standard Eval Return')
+    plt.xlabel('Training Episodes')
+    plt.ylabel('Average Return')
+    plt.title('Performance on Fixed Difficult Environment')
+    plt.grid(alpha=0.3)
+    plt.legend()
+    plt.savefig(os.path.join(config["save_dir"], "eval_return_curve.pdf"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(eval_records['episodes'], eval_records['avg_targets'], 's-', label='Avg Covered Targets')
+    plt.xlabel('Training Episodes')
+    plt.ylabel('Covered Targets')
+    plt.title('Coverage Progress on Fixed Environment')
+    plt.grid(alpha=0.3)
+    plt.legend()
+    plt.savefig(os.path.join(config["save_dir"], "eval_coverage_curve.pdf"), dpi=300, bbox_inches='tight')
+    plt.close()
     return return_value.item()
 
 
 def evaluate(config, env, agent, pmi, num_steps):
     return_value = ReturnValueOfTrain()
     env.reset(config=config)
-    transition_dict, reward, tt_return, bp_return, dtp_return,op_return,average_targets,average_obstacles, max_targets,max_obstacles = operate_epoch(config, env, agent, pmi, num_steps)
-    return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,average_targets,average_obstacles, max_targets,max_obstacles)
-    draw_animation(config=config, env=env, num_steps=num_steps, ep_num=0)
+    transition_dict, reward, tt_return, bp_return, dtp_return,op_return,fovea_return,average_targets,average_obstacles, max_targets,max_obstacles = operate_epoch(config, env, agent, pmi, num_steps)
+    return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,fovea_return,average_targets,average_obstacles, max_targets,max_obstacles)
+    # draw_animation(config=config, env=env, num_steps=num_steps, ep_num=0)
     env.save_position(save_dir=config["save_dir"], epoch_i=0)
     env.save_covered_num(save_dir=config["save_dir"], epoch_i=0)
     env.save_obstacle_num(save_dir=config["save_dir"], epoch_i=0)
     return return_value.item()
+
+
+def evaluate_standard(eval_config,agent, num_steps=100):
+    temp_env = Environment(
+        n_uav=eval_config['environment']['n_uav'],
+        m_targets=eval_config['environment']['m_targets'],
+        x_max=eval_config['environment']['x_max'],
+        y_max=eval_config['environment']['y_max'],
+        na=eval_config['environment']['na'],
+        n_obstacles=eval_config['environment']['n_obstacles']
+    )
+    temp_env.reset(eval_config)
+    # 评估时关闭PMI和探索奖励
+    transition_dict, reward, tt_return, bp_return, dtp_return, op_return, fovea_return, \
+        avg_targets, avg_obs, max_targets, max_obs = operate_epoch(
+            eval_config, temp_env, agent, pmi=None, num_steps=num_steps, explorer=None
+        )
+    # print(
+    #     f"Eval map size: {temp_env.x_max}x{temp_env.y_max}, dp={temp_env.uav_list[0].dp}, targets={temp_env.m_targets}")
+    return {
+         'reward': reward,
+        'tt_return': tt_return,
+        'bp_return': bp_return,
+        'dtp_return': dtp_return,
+        'op_return': op_return,
+        'fovea_return': fovea_return,
+        'avg_covered_targets': avg_targets,
+        'max_covered_targets': max_targets
+    }
 
 
 def run_epoch(config, pmi, env, num_steps):
@@ -484,6 +649,7 @@ def run_epoch(config, pmi, env, num_steps):
     episode_boundary_punishment_return = 0
     episode_duplicate_tracking_punishment_return = 0
     episode_obstacle_punishment_return = 0
+    episode_fovea_bonus_return = 0
     covered_obstacle_list = []
     covered_targets_list = []
 
@@ -504,6 +670,7 @@ def run_epoch(config, pmi, env, num_steps):
         covered_targets_list.append(covered_targets)
         episode_obstacle_punishment_return += sum(reward_list['obstacle_punishment'])
         covered_obstacle_list.append(covered_obstacles)
+        episode_fovea_bonus_return += sum(reward_list['fovea_bonus'])
 
     average_covered_targets = np.mean(covered_targets_list)
     max_covered_targets = np.max(covered_targets_list)
@@ -511,16 +678,16 @@ def run_epoch(config, pmi, env, num_steps):
     max_covered_obstacles = np.max(covered_obstacle_list)
 
     return (transition_dict, episode_return, episode_target_tracking_return,
-            episode_boundary_punishment_return, episode_duplicate_tracking_punishment_return,episode_obstacle_punishment_return,
+            episode_boundary_punishment_return, episode_duplicate_tracking_punishment_return,episode_obstacle_punishment_return,episode_fovea_bonus_return,
             average_covered_targets,average_covered_obstacles, max_covered_targets,max_covered_obstacles)
 
 
 def run(config, env, pmi, num_steps):
     return_value = ReturnValueOfTrain()
     env.reset(config=config)
-    transition_dict, reward, tt_return, bp_return, dtp_return, op_return,average_targets, average_obstacles,max_targets,max_obstacles = run_epoch(config, pmi, env, num_steps)
-    return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,average_targets, average_obstacles,max_targets,max_obstacles)
-    draw_animation(config=config, env=env, num_steps=num_steps, ep_num=0)
+    transition_dict, reward, tt_return, bp_return, dtp_return, op_return,fovea_bonus_return,average_targets, average_obstacles,max_targets,max_obstacles = run_epoch(config, pmi, env, num_steps)
+    return_value.save_epoch(reward, tt_return, bp_return, dtp_return, op_return,fovea_bonus_return,average_targets, average_obstacles,max_targets,max_obstacles)
+    # draw_animation(config=config, env=env, num_steps=num_steps, ep_num=0)
     env.save_position(save_dir=config["save_dir"], epoch_i=0)
     env.save_covered_num(save_dir=config["save_dir"], epoch_i=0)
     env.save_obstacle_num(save_dir=config["save_dir"], epoch_i=0)
