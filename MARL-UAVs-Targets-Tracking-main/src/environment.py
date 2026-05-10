@@ -330,6 +330,8 @@ class Environment:
         #新增障碍物惩罚
         obstacle_punishments = []
         fovea_bonus_rewards = []
+        #新增的追踪单一目标的奖励
+        exclusive_rewards = []
 
         #封装奖励与惩罚
         for uav in self.uav_list:
@@ -338,13 +340,15 @@ class Environment:
              boundary_punishment,
              duplicate_tracking_punishment,
              obstacle_punishment,
-             fovea_bonus
+             fovea_bonus,
+             exclusive
              ) = uav.calculate_raw_reward(self.uav_list, self.target_list, self.obstacle_list,self.x_max, self.y_max)
 
             # 奖励裁剪+归一化（避免极端值影响训练）
             #追踪奖励：0~2×目标数 → 归一化到0~1
             target_tracking_reward = clip_and_normalize(target_tracking_reward,
-                                                        0, 4 * config['environment']['m_targets'], 0, name="track")
+                                                        0, 28, 0, name="track")
+            #4 * config['environment']['m_targets']
             #重复追踪惩罚：-e/2×无人机数~0 → 归一化到-1~0
             duplicate_tracking_punishment = clip_and_normalize(duplicate_tracking_punishment,
                                                                -e / 2 * config['environment']['n_uav'], 0, -1,name="duplicate")
@@ -355,6 +359,8 @@ class Environment:
             obstacle_punishment = clip_and_normalize(obstacle_punishment, -2.0, 0, -1,name="obstacle")
             fovea_bonus = clip_and_normalize(fovea_bonus, 0, 0.5, 0, name="fovea")
 
+            exclusive_bonus = clip_and_normalize(exclusive, 0, 2.1, 0,name="exclusive")
+
 
 
             # 保存奖励和惩罚
@@ -364,6 +370,7 @@ class Environment:
             #new
             obstacle_punishments.append(obstacle_punishment)
             fovea_bonus_rewards.append(fovea_bonus)
+            exclusive_rewards.append(exclusive)
 
 
 
@@ -371,7 +378,7 @@ class Environment:
             uav.raw_reward = (config["uav"]["alpha"] * target_tracking_reward + config["uav"]["beta"] *
                               boundary_punishment + config["uav"]["gamma"] * duplicate_tracking_punishment+
                               #new
-                              config["uav"]["omega"] * obstacle_punishment+ config["uav"].get("fovea_weight", 0.5) * fovea_bonus)
+                              config["uav"]["omega"] * obstacle_punishment+ config["uav"].get("fovea_weight", 0.5) * fovea_bonus+config["uav"].get("exclusive_weight", 0.5) * exclusive_bonus)
 
         rewards = []
         #计算协作的奖励
