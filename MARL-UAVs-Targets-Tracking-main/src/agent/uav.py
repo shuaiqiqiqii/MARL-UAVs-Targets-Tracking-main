@@ -60,6 +60,8 @@ class UAV:
         self.raw_reward = 0
         self.reward = 0
 
+        self.last_closest_obstacle_dist = None  # 用于紧急避障奖励，记录上一时刻最近障碍物的距离
+
     def __distance(self, target) -> float:
         """
         计算无人机到目标/队友的欧氏距离
@@ -314,23 +316,39 @@ class UAV:
                 track_reward += base_reward + continuous_bonus
         return track_reward
 
-    def __calculate_duplicate_tracking_punishment(self, uav_list: List['UAV'], radio=2) -> float:
+#奖励原先的radio，原先为2，范围太多，距离的太远也会收到惩罚，不合理
+    # def __calculate_duplicate_tracking_punishment(self, uav_list: List['UAV'], radio=1.2) -> float:
+    #     """
+    #     重复最终追踪惩罚，使用指数惩罚，距离越近惩罚越重
+    #     calculate duplicate tracking punishment
+    #     :param uav_list: [class UAV]
+    #     :param radio: radio用来控制惩罚的范围, 超出多远才算入惩罚
+    #     :return: scalar (-e/2, -1/2]
+    #     """
+    #     total_punishment = 0
+    #     for other_uav in uav_list:
+    #         if other_uav != self:
+    #             distance = self.__distance(other_uav)
+    #             if distance <= radio * self.dp:
+    #                 punishment = -0.5 * exp((radio * self.dp - distance) / (radio * self.dp))
+    #                 # total_punishment += clip_and_normalize(punishment, -e/2, -1/2, -1)
+    #                 total_punishment += punishment  # 没有clip, 在调用时外部clip
+    #     return total_punishment
+    def __calculate_duplicate_tracking_punishment(self, uav_list, target_list):
         """
-        重复最终追踪惩罚，使用指数惩罚，距离越近惩罚越重
-        calculate duplicate tracking punishment
-        :param uav_list: [class UAV]
-        :param radio: radio用来控制惩罚的范围, 超出多远才算入惩罚
-        :return: scalar (-e/2, -1/2]
+        只惩罚同时观测到相同目标的队友（真正扎堆），
+        而不是惩罚所有在通信范围内的队友。
         """
-        total_punishment = 0
-        for other_uav in uav_list:
-            if other_uav != self:
-                distance = self.__distance(other_uav)
-                if distance <= radio * self.dp:
-                    punishment = -0.5 * exp((radio * self.dp - distance) / (radio * self.dp))
-                    # total_punishment += clip_and_normalize(punishment, -e/2, -1/2, -1)
-                    total_punishment += punishment  # 没有clip, 在调用时外部clip
-        return total_punishment
+        punishment = 0.0
+        for target in target_list:
+            # 统计所有能感知到该目标的无人机
+            observers = [u for u in uav_list if u.distance(u.x, u.y, target.x, target.y) <= u.dp]
+            if len(observers) > 1 and self in observers:
+                # 越多人扎堆同一目标，惩罚越大（上限 -0.5）
+                # punishment -= min(0.5, (len(observers) - 1) * 0.2)
+                punishment -= min(0.2, (len(observers) - 1) * 0.05)
+
+        return max(punishment, -1.0)  # 限制总惩罚不低于 -1.0
 
     def __calculate_boundary_punishment(self, x_max: float, y_max: float) -> float:
         # 安全区域扩展：距离边界 min_distance 以内才开始警告
@@ -388,6 +406,43 @@ class UAV:
                     max_punishment = punish
         return max_punishment
 
+    def __calculate_exclusive_tracking_bonus(self, target_list, uav_list):
+        """
+        独占追踪目标奖励
+        如果某个目标只有本机在追踪（感知范围内仅本机），则给予奖励。
+        奖励大小可调，此处设为每个独占目标给予 0.3。
+        """
+        bonus = 0.0
+        for target in target_list:
+            # 统计所有无人机中距离目标在 dp 内的数量
+            observers = [u for u in uav_list if u.distance(u.x, u.y, target.x, target.y) <= u.dp]
+            if len(observers) == 1 and observers[0] == self:
+                bonus += 0.3  # 可调参数
+        return bonus
+
+    def __calculate_emergency_avoidance_bonus(self, obstacle_list, safe_dist=150.0, margin=2.0):
+        """
+        如果上一时刻处于危险距离内，且本时刻距离明显增大，则给予成功逃避奖励。
+        safe_dist: 危险距离阈值
+        margin: 最小距离增量才算成功逃离
+        """
+        if not obstacle_list:
+            self.last_closest_obstacle_dist = None
+            return 0.0
+
+        current_closest = min(self.__distance(obs) for obs in obstacle_list)
+        bonus = 0.0
+
+        if self.last_closest_obstacle_dist is not None and self.last_closest_obstacle_dist < safe_dist:
+            if current_closest > self.last_closest_obstacle_dist + margin:
+                bonus = 0.3  # 成功逃离奖励
+
+        self.last_closest_obstacle_dist = current_closest
+        return bonus
+
+
+
+
     #TODO可能存在修改 封装障碍物惩罚
     def calculate_raw_reward(self, uav_list: List['UAV'], target__list: List['TARGET'],obstacle_list:List['OBSTACLE'], x_max, y_max):
         """
@@ -395,14 +450,19 @@ class UAV:
         calculate three parts of the reward/punishment for this uav
         :return: float, float, float
         """
-        reward = self.__calculate_multi_target_tracking_reward(target__list)
+        tracking_reward = self.__calculate_multi_target_tracking_reward(target__list)
         boundary_punishment = self.__calculate_boundary_punishment(x_max, y_max)
-        punishment = self.__calculate_duplicate_tracking_punishment(uav_list)
+        # dup_punishment = self.__calculate_duplicate_tracking_punishment(uav_list)
         #新增惩罚
         obstacle_punishment = self.__calculate_obstacle_punishment(obstacle_list)
         # alloc = self.__calculate_target_allocation_punishment(target__list, uav_list)
         fovea = self.__calculate_fovea_bonus(target__list)  # 新增
-        return reward, boundary_punishment, punishment,obstacle_punishment,fovea
+        exclusive = self.__calculate_exclusive_tracking_bonus(target__list, uav_list)
+        dup_punishment = self.__calculate_duplicate_tracking_punishment(uav_list, target__list)
+
+        avoidance_bonus = self.__calculate_emergency_avoidance_bonus(obstacle_list, safe_dist=150.0, margin=2.0)
+
+        return tracking_reward, boundary_punishment, dup_punishment,obstacle_punishment,fovea,exclusive,avoidance_bonus
 
     def __calculate_cooperative_reward_by_pmi(self, uav_list: List['UAV'], pmi_net: "PMINetwork", a) -> float:
         """

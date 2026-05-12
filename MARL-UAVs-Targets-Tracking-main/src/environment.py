@@ -219,7 +219,9 @@ class Environment:
          boundary_punishment,
          duplicate_tracking_punishment,
          obstacle_punishment,
-         fovea_bonus) = self.calculate_rewards(config=config, pmi=pmi)
+         fovea_bonus,
+         exclusive_bonus,
+         emergency_bonus) = self.calculate_rewards(config=config, pmi=pmi)
 
         #获取下一状态
         next_states = self.get_states()
@@ -254,7 +256,9 @@ class Environment:
             'duplicate_tracking_punishment': duplicate_tracking_punishment,
             #新增
             'obstacle_punishment': obstacle_punishment,
-            'fovea_bonus':fovea_bonus
+            'fovea_bonus':fovea_bonus,
+            'exclusive_bonus': exclusive_bonus,
+            'emergency_bonus': emergency_bonus
         }
 
         return next_states, reward, covered_targets,covered_obstacle
@@ -332,6 +336,8 @@ class Environment:
         fovea_bonus_rewards = []
         #新增的追踪单一目标的奖励
         exclusive_rewards = []
+        #新增的计算紧急避障奖励
+        emergency_rewards = []
 
         #封装奖励与惩罚
         for uav in self.uav_list:
@@ -341,7 +347,8 @@ class Environment:
              duplicate_tracking_punishment,
              obstacle_punishment,
              fovea_bonus,
-             exclusive
+             exclusive,
+             emergency_bonus
              ) = uav.calculate_raw_reward(self.uav_list, self.target_list, self.obstacle_list,self.x_max, self.y_max)
 
             # 奖励裁剪+归一化（避免极端值影响训练）
@@ -350,8 +357,9 @@ class Environment:
                                                         0, 28, 0, name="track")
             #4 * config['environment']['m_targets']
             #重复追踪惩罚：-e/2×无人机数~0 → 归一化到-1~0
-            duplicate_tracking_punishment = clip_and_normalize(duplicate_tracking_punishment,
-                                                               -e / 2 * config['environment']['n_uav'], 0, -1,name="duplicate")
+            # duplicate_tracking_punishment = clip_and_normalize(duplicate_tracking_punishment,
+            #                                                    -e / 2 * config['environment']['n_uav'], 0, -1,name="duplicate")
+            duplicate_tracking_punishment = clip_and_normalize(duplicate_tracking_punishment, -2.5, 0, -1,name='duplicate')
             #越界惩罚：-0.5~0 → 归一化到-1~0
             boundary_punishment = clip_and_normalize(boundary_punishment, -2.0, 0, -1,name="boundary")
 
@@ -360,6 +368,8 @@ class Environment:
             fovea_bonus = clip_and_normalize(fovea_bonus, 0, 0.5, 0, name="fovea")
 
             exclusive_bonus = clip_and_normalize(exclusive, 0, 2.1, 0,name="exclusive")
+
+            emergency_bonus = clip_and_normalize(emergency_bonus, 0, 0.3, 0, name="emergency")
 
 
 
@@ -372,22 +382,26 @@ class Environment:
             fovea_bonus_rewards.append(fovea_bonus)
             exclusive_rewards.append(exclusive)
 
+            emergency_rewards.append(emergency_bonus)
+
 
 
             # 计算原始总奖励 加权和
             uav.raw_reward = (config["uav"]["alpha"] * target_tracking_reward + config["uav"]["beta"] *
                               boundary_punishment + config["uav"]["gamma"] * duplicate_tracking_punishment+
                               #new
-                              config["uav"]["omega"] * obstacle_punishment+ config["uav"].get("fovea_weight", 0.5) * fovea_bonus+config["uav"].get("exclusive_weight", 0.5) * exclusive_bonus)
+                              config["uav"]["omega"] * obstacle_punishment+ config["uav"].get("fovea_weight", 0.5) * fovea_bonus+config["uav"].get("exclusive_weight", 0.5) * exclusive_bonus+config["uav"].get("emergency_weight", 0.2) * emergency_bonus)
 
         rewards = []
         #计算协作的奖励
         #待重新构建
         for uav in self.uav_list:
             reward = uav.calculate_cooperative_reward(self.uav_list, pmi, config['cooperative'])
-            uav.reward = clip_and_normalize(reward, -1, 1)
+            # uav.reward = clip_and_normalize(reward, -1, 1,name="reward")
+            uav.reward = reward
             rewards.append(uav.reward)
-        return rewards, target_tracking_rewards, boundary_punishments, duplicate_tracking_punishments ,obstacle_punishments,fovea_bonus_rewards
+        return (rewards, target_tracking_rewards, boundary_punishments, duplicate_tracking_punishments ,obstacle_punishments,
+                fovea_bonus_rewards,exclusive_rewards,emergency_rewards)
 
 
     def save_position(self, save_dir, epoch_i):
